@@ -125,3 +125,41 @@ def create_initial_system_state(
                 primary_interval,
             ),
         )
+
+def update_current_position(
+    conn: PgConnection,
+    *,
+    state_id: int,
+    current_position_id: int | None,
+    current_position_side: str | None,
+    updated_by: str,
+) -> None:
+    """
+    功能：更新 system_state 的目前持倉欄位。
+    參數：
+        conn: PostgreSQL 連線物件。
+        state_id: system_state 主鍵。
+        current_position_id: 目前持倉 ID，可為 None。
+        current_position_side: 目前持倉方向，可為 LONG、SHORT 或 None。
+        updated_by: 更新來源說明。
+    """
+    sql = """
+    UPDATE system_state
+    SET
+        current_position_id = %s,
+        current_position_side = %s,
+        updated_at = NOW(),
+        updated_by = %s
+    WHERE id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                current_position_id,
+                current_position_side,
+                updated_by,
+                state_id,
+            ),
+        )
