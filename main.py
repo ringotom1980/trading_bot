@@ -59,7 +59,11 @@ def main() -> None:
         logger.info("ACTIVE_SYMBOL=%s", active_strategy["symbol"])
         logger.info("ACTIVE_INTERVAL=%s", active_strategy["interval"])
 
-        run_runtime_once(conn)
+        run_runtime_once(
+            conn,
+            settings=settings,
+            active_strategy=active_strategy,
+        )
 
 
 if __name__ == "__main__":
