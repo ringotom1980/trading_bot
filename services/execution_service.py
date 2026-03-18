@@ -1,6 +1,6 @@
 """
 Path: services/execution_service.py
-說明：執行服務層，整合市場資料、特徵、訊號與決策，並在符合條件時建立模擬 order 與 position。
+說明：執行服務層，整合市場資料、特徵、訊號與決策，並在符合條件時建立模擬開倉或模擬平倉流程。
 """
 
 from __future__ import annotations
@@ -15,8 +15,15 @@ from exchange.binance_client import BinanceClient
 from exchange.market_data import get_latest_klines
 from storage.repositories.decisions_repo import insert_decision_log, mark_decision_executed
 from storage.repositories.orders_repo import create_order
-from storage.repositories.positions_repo import create_position, update_position_entry_order_id
+from storage.repositories.positions_repo import (
+    close_position,
+    create_position,
+    get_open_position_by_symbol,
+    update_position_entry_order_id,
+    update_position_exit_order_id,
+)
 from storage.repositories.system_state_repo import update_current_position
+from storage.repositories.trades_repo import create_trade_log
 from strategy.decision import calculate_decision
 from strategy.features import calculate_feature_pack
 from strategy.signals import calculate_signal_scores
@@ -87,13 +94,6 @@ def _create_simulated_entry_flow(
 ) -> tuple[int, int, str]:
     """
     功能：依 ENTER_LONG / ENTER_SHORT 建立模擬開倉 order 與 position。
-    參數：
-        conn: PostgreSQL 連線物件。
-        settings: 全域設定物件。
-        system_state: system_state 資料字典。
-        active_strategy: ACTIVE 策略資料字典。
-        latest_kline: 最新 K 線資料。
-        decision_result: 決策結果。
     回傳：
         (order_id, position_id, position_side)
     """
@@ -177,6 +177,122 @@ def _create_simulated_entry_flow(
     return order_id, position_id, position_side
 
 
+def _create_simulated_exit_flow(
+    conn: PgConnection,
+    *,
+    settings: Settings,
+    system_state: dict[str, Any],
+    active_strategy: dict[str, Any],
+    latest_kline: dict[str, Any],
+) -> tuple[int, int]:
+    """
+    功能：依目前 OPEN 持倉建立模擬平倉 order、關閉 position 並寫入 trades_log。
+    回傳：
+        (exit_order_id, closed_position_id)
+    """
+    open_position = get_open_position_by_symbol(conn, settings.primary_symbol)
+    if open_position is None:
+        raise RuntimeError("目前沒有 OPEN 持倉，無法執行模擬平倉流程")
+
+    avg_price = float(latest_kline["close"])
+    qty = float(open_position["entry_qty"])
+    filled_at = _ms_to_datetime(int(latest_kline["close_time"]))
+
+    if open_position["side"] == "LONG":
+        order_side = "SELL"
+        gross_pnl = (avg_price - float(open_position["entry_price"])) * qty
+    else:
+        order_side = "BUY"
+        gross_pnl = (float(open_position["entry_price"]) - avg_price) * qty
+
+    fees = 2.0
+    net_pnl = gross_pnl - fees
+
+    exit_order_id = create_order(
+        conn,
+        position_id=int(open_position["position_id"]),
+        symbol=settings.primary_symbol,
+        interval=settings.primary_interval,
+        engine_mode=system_state["engine_mode"],
+        trade_mode=str(system_state["trade_mode"]),
+        strategy_version_id=int(active_strategy["strategy_version_id"]),
+        client_order_id=f"runtime_exit_{int(latest_kline['close_time'])}",
+        exchange_order_id=f"sim_exit_{int(latest_kline['close_time'])}",
+        side=order_side,
+        order_type="MARKET",
+        reduce_only=True,
+        qty=qty,
+        price=None,
+        avg_price=avg_price,
+        status="FILLED",
+        exchange_status_raw="FILLED",
+        placed_at=filled_at,
+        filled_at=filled_at,
+        raw_request={
+            "symbol": settings.primary_symbol,
+            "side": order_side,
+            "type": "MARKET",
+            "quantity": qty,
+            "reduceOnly": True,
+        },
+        raw_response={
+            "status": "FILLED",
+            "avgPrice": str(avg_price),
+        },
+    )
+
+    update_position_exit_order_id(
+        conn,
+        position_id=int(open_position["position_id"]),
+        exit_order_id=exit_order_id,
+    )
+
+    close_position(
+        conn,
+        position_id=int(open_position["position_id"]),
+        exit_price=avg_price,
+        exit_qty=qty,
+        gross_pnl=gross_pnl,
+        fees=fees,
+        net_pnl=net_pnl,
+        closed_at=filled_at,
+        close_reason="SIGNAL_EXIT",
+    )
+
+    create_trade_log(
+        conn,
+        position_id=int(open_position["position_id"]),
+        symbol=str(open_position["symbol"]),
+        interval=str(open_position["interval"]),
+        engine_mode=str(open_position["engine_mode"]),
+        trade_mode=open_position["trade_mode"],
+        strategy_version_id=int(open_position["strategy_version_id"]),
+        side=str(open_position["side"]),
+        entry_time=open_position["opened_at"],
+        exit_time=filled_at,
+        entry_price=float(open_position["entry_price"]),
+        exit_price=avg_price,
+        qty=qty,
+        gross_pnl=gross_pnl,
+        fees=fees,
+        net_pnl=net_pnl,
+        bars_held=None,
+        close_reason="SIGNAL_EXIT",
+        entry_order_id=open_position["entry_order_id"],
+        exit_order_id=exit_order_id,
+    )
+
+    update_current_position(
+        conn,
+        state_id=1,
+        current_position_id=None,
+        current_position_side=None,
+        updated_by="runtime_exit_flow",
+    )
+
+    return exit_order_id, int(open_position["position_id"])
+
+
 def record_runtime_decision(
     conn: PgConnection,
     *,
@@ -186,13 +302,7 @@ def record_runtime_decision(
     client: BinanceClient,
 ) -> dict[str, Any]:
     """
-    功能：由 runtime 整合市場資料、特徵、訊號與決策，寫入 decisions_log，並在 ENTER 決策時建立模擬開倉流程。
-    參數：
-        conn: PostgreSQL 連線物件。
-        settings: 全域設定物件。
-        system_state: system_state 資料字典。
-        active_strategy: ACTIVE 策略資料字典。
-        client: Binance API 客戶端。
+    功能：由 runtime 整合市場資料、特徵、訊號與決策，寫入 decisions_log，並在 ENTER / EXIT 決策時建立模擬執行流程。
     回傳：
         執行結果摘要字典。
     """
@@ -243,6 +353,18 @@ def record_runtime_decision(
             decision_result=decision_result,
         )
         executed = True
+
+    elif decision_result["decision"] == "EXIT" and system_state["current_position_id"] is not None:
+        linked_order_id, closed_position_id = _create_simulated_exit_flow(
+            conn,
+            settings=settings,
+            system_state=system_state,
+            active_strategy=active_strategy,
+            latest_kline=latest_kline,
+        )
+        executed = True
+        position_id_after = None
+        position_side_after = None
 
     mark_decision_executed(
         conn,
