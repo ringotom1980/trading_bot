@@ -152,3 +152,58 @@ def create_position(
         raise RuntimeError("建立 positions 失敗：未取得 position_id")
 
     return int(row[0])
+
+def close_position(
+    conn: PgConnection,
+    *,
+    position_id: int,
+    exit_price: float,
+    exit_qty: float,
+    gross_pnl: float,
+    fees: float,
+    net_pnl: float,
+    closed_at: datetime,
+    close_reason: str,
+) -> None:
+    """
+    功能：將指定持倉更新為 CLOSED。
+    參數：
+        conn: PostgreSQL 連線物件。
+        position_id: 持倉主鍵。
+        exit_price: 出場價格。
+        exit_qty: 出場數量。
+        gross_pnl: 毛損益。
+        fees: 手續費。
+        net_pnl: 淨損益。
+        closed_at: 平倉時間。
+        close_reason: 平倉原因。
+    """
+    sql = """
+    UPDATE positions
+    SET
+        status = 'CLOSED',
+        exit_price = %s,
+        exit_qty = %s,
+        gross_pnl = %s,
+        fees = %s,
+        net_pnl = %s,
+        closed_at = %s,
+        close_reason = %s,
+        updated_at = NOW()
+    WHERE position_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                exit_price,
+                exit_qty,
+                gross_pnl,
+                fees,
+                net_pnl,
+                closed_at,
+                close_reason,
+                position_id,
+            ),
+        )
