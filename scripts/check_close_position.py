@@ -74,7 +74,15 @@ def main() -> None:
             bars_held=None,
             close_reason="MANUAL",
         )
+        from storage.repositories.system_state_repo import update_current_position
 
+        update_current_position(
+            conn,
+            state_id=1,
+            current_position_id=None,
+            current_position_side=None,
+            updated_by="check_close_position",
+        )
         latest_trade = get_latest_trade_log(conn)
 
     logger.info("已完成平倉測試，trade_id=%s", trade_id)
