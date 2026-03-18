@@ -1,0 +1,127 @@
+"""
+Path: storage/repositories/system_state_repo.py
+說明：系統主狀態資料表存取層，負責查詢與初始化唯一一筆 system_state。
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from psycopg2.extensions import connection as PgConnection
+
+
+def get_system_state(conn: PgConnection, state_id: int = 1) -> dict[str, Any] | None:
+    """
+    功能：依主鍵查詢 system_state。
+    參數：
+        conn: PostgreSQL 連線物件。
+        state_id: system_state 主鍵，預設為 1。
+    回傳：
+        system_state 資料字典；若不存在則回傳 None。
+    """
+    sql = """
+    SELECT
+        id,
+        engine_mode,
+        trade_mode,
+        trading_state,
+        live_armed,
+        active_strategy_version_id,
+        primary_symbol,
+        primary_interval,
+        current_position_side,
+        current_position_id,
+        last_bar_close_time,
+        last_decision_id,
+        last_order_id,
+        last_trade_id,
+        last_heartbeat_at,
+        updated_at,
+        updated_by,
+        note
+    FROM system_state
+    WHERE id = %s
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (state_id,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "id": row[0],
+        "engine_mode": row[1],
+        "trade_mode": row[2],
+        "trading_state": row[3],
+        "live_armed": row[4],
+        "active_strategy_version_id": row[5],
+        "primary_symbol": row[6],
+        "primary_interval": row[7],
+        "current_position_side": row[8],
+        "current_position_id": row[9],
+        "last_bar_close_time": row[10],
+        "last_decision_id": row[11],
+        "last_order_id": row[12],
+        "last_trade_id": row[13],
+        "last_heartbeat_at": row[14],
+        "updated_at": row[15],
+        "updated_by": row[16],
+        "note": row[17],
+    }
+
+
+def create_initial_system_state(
+    conn: PgConnection,
+    active_strategy_version_id: int,
+    primary_symbol: str,
+    primary_interval: str,
+) -> None:
+    """
+    功能：建立第一筆 system_state 初始資料。
+    參數：
+        conn: PostgreSQL 連線物件。
+        active_strategy_version_id: 目前啟用的策略版本 ID。
+        primary_symbol: 主交易標的。
+        primary_interval: 主交易週期。
+    """
+    sql = """
+    INSERT INTO system_state (
+        id,
+        engine_mode,
+        trade_mode,
+        trading_state,
+        live_armed,
+        active_strategy_version_id,
+        primary_symbol,
+        primary_interval,
+        updated_at,
+        updated_by,
+        note
+    )
+    VALUES (
+        1,
+        'REALTIME',
+        'TESTNET',
+        'OFF',
+        FALSE,
+        %s,
+        %s,
+        %s,
+        NOW(),
+        'seed_strategy',
+        '初始 system_state'
+    )
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                active_strategy_version_id,
+                primary_symbol,
+                primary_interval,
+            ),
+        )
