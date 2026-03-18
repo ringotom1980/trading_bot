@@ -11,6 +11,35 @@ from typing import Any
 from psycopg2.extensions import connection as PgConnection
 
 
+def _row_to_strategy_version(row: tuple[Any, ...]) -> dict[str, Any]:
+    """
+    功能：將 strategy_versions 查詢結果 tuple 轉成字典格式。
+    參數：
+        row: strategy_versions 單筆查詢結果。
+    回傳：
+        策略版本資料字典。
+    """
+    return {
+        "strategy_version_id": row[0],
+        "version_code": row[1],
+        "status": row[2],
+        "source_type": row[3],
+        "base_version_id": row[4],
+        "symbol": row[5],
+        "interval": row[6],
+        "feature_set_json": row[7],
+        "params_json": row[8],
+        "backtest_summary_json": row[9],
+        "validation_summary_json": row[10],
+        "promotion_score": row[11],
+        "is_candidate": row[12],
+        "created_at": row[13],
+        "activated_at": row[14],
+        "retired_at": row[15],
+        "note": row[16],
+    }
+
+
 def get_strategy_version_by_code(conn: PgConnection, version_code: str) -> dict[str, Any] | None:
     """
     功能：依 version_code 查詢單一策略版本。
@@ -51,25 +80,92 @@ def get_strategy_version_by_code(conn: PgConnection, version_code: str) -> dict[
     if row is None:
         return None
 
-    return {
-        "strategy_version_id": row[0],
-        "version_code": row[1],
-        "status": row[2],
-        "source_type": row[3],
-        "base_version_id": row[4],
-        "symbol": row[5],
-        "interval": row[6],
-        "feature_set_json": row[7],
-        "params_json": row[8],
-        "backtest_summary_json": row[9],
-        "validation_summary_json": row[10],
-        "promotion_score": row[11],
-        "is_candidate": row[12],
-        "created_at": row[13],
-        "activated_at": row[14],
-        "retired_at": row[15],
-        "note": row[16],
-    }
+    return _row_to_strategy_version(row)
+
+
+def get_strategy_version_by_id(conn: PgConnection, strategy_version_id: int) -> dict[str, Any] | None:
+    """
+    功能：依 strategy_version_id 查詢單一策略版本。
+    參數：
+        conn: PostgreSQL 連線物件。
+        strategy_version_id: 策略版本主鍵。
+    回傳：
+        查詢到的策略版本資料字典；若不存在則回傳 None。
+    """
+    sql = """
+    SELECT
+        strategy_version_id,
+        version_code,
+        status,
+        source_type,
+        base_version_id,
+        symbol,
+        interval,
+        feature_set_json,
+        params_json,
+        backtest_summary_json,
+        validation_summary_json,
+        promotion_score,
+        is_candidate,
+        created_at,
+        activated_at,
+        retired_at,
+        note
+    FROM strategy_versions
+    WHERE strategy_version_id = %s
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (strategy_version_id,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return _row_to_strategy_version(row)
+
+
+def get_active_strategy_version(conn: PgConnection) -> dict[str, Any] | None:
+    """
+    功能：查詢目前唯一 ACTIVE 的策略版本。
+    參數：
+        conn: PostgreSQL 連線物件。
+    回傳：
+        ACTIVE 策略版本資料字典；若不存在則回傳 None。
+    """
+    sql = """
+    SELECT
+        strategy_version_id,
+        version_code,
+        status,
+        source_type,
+        base_version_id,
+        symbol,
+        interval,
+        feature_set_json,
+        params_json,
+        backtest_summary_json,
+        validation_summary_json,
+        promotion_score,
+        is_candidate,
+        created_at,
+        activated_at,
+        retired_at,
+        note
+    FROM strategy_versions
+    WHERE status = 'ACTIVE'
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql)
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return _row_to_strategy_version(row)
 
 
 def create_strategy_version(
