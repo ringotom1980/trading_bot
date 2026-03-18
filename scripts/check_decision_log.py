@@ -86,3 +86,5 @@ def main() -> None:
 
     logger.info("已寫入 decisions_log，decision_id=%s", decision_id)
     logger.info("LATEST_DECISION=%s", latest_decision)
+if __name__ == "__main__":
+    main()
