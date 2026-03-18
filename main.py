@@ -1,12 +1,13 @@
 ﻿"""
 Path: main.py
-說明：主程式入口，負責載入設定、初始化 logging、連線資料庫，並讀取 system_state 與目前 ACTIVE 策略。
+說明：主程式入口，負責載入設定、初始化 logging、連線資料庫，讀取 system_state 與 ACTIVE 策略，並執行一次 runtime 流程。
 """
 
 from __future__ import annotations
 
 from config.logging import get_logger, setup_logging
 from config.settings import load_settings
+from core.runtime import run_runtime_once
 from services.strategy_service import load_active_strategy
 from storage.db import connection_scope, test_connection
 from storage.repositories.system_state_repo import get_system_state
@@ -44,19 +45,21 @@ def main() -> None:
 
         active_strategy = load_active_strategy(conn)
 
-    logger.info("SYSTEM_STATE_ID=%s", system_state["id"])
-    logger.info("DB_ENGINE_MODE=%s", system_state["engine_mode"])
-    logger.info("DB_TRADE_MODE=%s", system_state["trade_mode"])
-    logger.info("DB_TRADING_STATE=%s", system_state["trading_state"])
-    logger.info("DB_LIVE_ARMED=%s", system_state["live_armed"])
-    logger.info("DB_ACTIVE_STRATEGY_VERSION_ID=%s", system_state["active_strategy_version_id"])
+        logger.info("SYSTEM_STATE_ID=%s", system_state["id"])
+        logger.info("DB_ENGINE_MODE=%s", system_state["engine_mode"])
+        logger.info("DB_TRADE_MODE=%s", system_state["trade_mode"])
+        logger.info("DB_TRADING_STATE=%s", system_state["trading_state"])
+        logger.info("DB_LIVE_ARMED=%s", system_state["live_armed"])
+        logger.info("DB_ACTIVE_STRATEGY_VERSION_ID=%s", system_state["active_strategy_version_id"])
 
-    logger.info("ACTIVE_STRATEGY_ID=%s", active_strategy["strategy_version_id"])
-    logger.info("ACTIVE_VERSION_CODE=%s", active_strategy["version_code"])
-    logger.info("ACTIVE_STATUS=%s", active_strategy["status"])
-    logger.info("ACTIVE_SOURCE_TYPE=%s", active_strategy["source_type"])
-    logger.info("ACTIVE_SYMBOL=%s", active_strategy["symbol"])
-    logger.info("ACTIVE_INTERVAL=%s", active_strategy["interval"])
+        logger.info("ACTIVE_STRATEGY_ID=%s", active_strategy["strategy_version_id"])
+        logger.info("ACTIVE_VERSION_CODE=%s", active_strategy["version_code"])
+        logger.info("ACTIVE_STATUS=%s", active_strategy["status"])
+        logger.info("ACTIVE_SOURCE_TYPE=%s", active_strategy["source_type"])
+        logger.info("ACTIVE_SYMBOL=%s", active_strategy["symbol"])
+        logger.info("ACTIVE_INTERVAL=%s", active_strategy["interval"])
+
+        run_runtime_once(conn)
 
 
 if __name__ == "__main__":
