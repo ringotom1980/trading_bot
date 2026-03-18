@@ -355,7 +355,7 @@ def record_runtime_decision(
         executed = True
 
     elif decision_result["decision"] == "EXIT" and system_state["current_position_id"] is not None:
-        linked_order_id, closed_position_id = _create_simulated_exit_flow(
+        linked_order_id, _closed_position_id = _create_simulated_exit_flow(
             conn,
             settings=settings,
             system_state=system_state,
