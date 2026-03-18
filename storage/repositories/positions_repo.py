@@ -207,3 +207,51 @@ def close_position(
                 position_id,
             ),
         )
+def update_position_entry_order_id(
+    conn: PgConnection,
+    *,
+    position_id: int,
+    entry_order_id: int,
+) -> None:
+    """
+    功能：更新持倉的 entry_order_id。
+    參數：
+        conn: PostgreSQL 連線物件。
+        position_id: 持倉主鍵。
+        entry_order_id: 開倉委託單主鍵。
+    """
+    sql = """
+    UPDATE positions
+    SET
+        entry_order_id = %s,
+        updated_at = NOW()
+    WHERE position_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (entry_order_id, position_id))
+
+
+def update_position_exit_order_id(
+    conn: PgConnection,
+    *,
+    position_id: int,
+    exit_order_id: int,
+) -> None:
+    """
+    功能：更新持倉的 exit_order_id。
+    參數：
+        conn: PostgreSQL 連線物件。
+        position_id: 持倉主鍵。
+        exit_order_id: 平倉委託單主鍵。
+    """
+    sql = """
+    UPDATE positions
+    SET
+        exit_order_id = %s,
+        updated_at = NOW()
+    WHERE position_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (exit_order_id, position_id))
