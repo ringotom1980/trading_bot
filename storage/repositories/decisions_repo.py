@@ -160,3 +160,44 @@ def get_latest_decision_log(conn: PgConnection) -> dict[str, Any] | None:
         "linked_order_id": row[18],
         "created_at": row[19],
     }
+    
+def mark_decision_executed(
+    conn: PgConnection,
+    *,
+    decision_id: int,
+    executed: bool,
+    position_id_after: int | None = None,
+    position_side_after: str | None = None,
+    linked_order_id: int | None = None,
+) -> None:
+    """
+    功能：更新 decisions_log 的 executed 狀態與執行後關聯資訊。
+    參數：
+        conn: PostgreSQL 連線物件。
+        decision_id: 決策主鍵。
+        executed: 是否已執行。
+        position_id_after: 執行後持倉 ID。
+        position_side_after: 執行後持倉方向。
+        linked_order_id: 關聯委託單 ID。
+    """
+    sql = """
+    UPDATE decisions_log
+    SET
+        executed = %s,
+        position_id_after = %s,
+        position_side_after = %s,
+        linked_order_id = %s
+    WHERE decision_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                executed,
+                position_id_after,
+                position_side_after,
+                linked_order_id,
+                decision_id,
+            ),
+        )

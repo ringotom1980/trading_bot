@@ -1,6 +1,6 @@
 """
 Path: core/runtime.py
-說明：即時執行流程骨架，負責讀取 system_state、更新 heartbeat，透過守門模組判斷是否可進交易流程，並在通過時寫入 decisions_log。
+說明：即時執行流程骨架，負責讀取 system_state、更新 heartbeat，透過守門模組判斷是否可進交易流程，並在通過時寫入 decisions_log 與模擬開倉流程。
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ def run_runtime_once(
 
     client = BinanceClient(settings)
 
-    decision_id = record_runtime_decision(
+    result = record_runtime_decision(
         conn,
         settings=settings,
         system_state=system_state,
@@ -59,4 +59,12 @@ def run_runtime_once(
         client=client,
     )
 
-    logger.info("已由 runtime 寫入 decisions_log，decision_id=%s", decision_id)
+    logger.info(
+        "runtime 決策完成：decision_id=%s, decision=%s, executed=%s, linked_order_id=%s, position_id_after=%s, position_side_after=%s",
+        result["decision_id"],
+        result["decision"],
+        result["executed"],
+        result["linked_order_id"],
+        result["position_id_after"],
+        result["position_side_after"],
+    )
