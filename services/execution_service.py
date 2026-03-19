@@ -235,6 +235,10 @@ def _create_simulated_exit_flow(
     qty = float(open_position["entry_qty"])
     filled_at = _ms_to_datetime(int(latest_kline["close_time"]))
 
+    opened_at = open_position["opened_at"]
+    if filled_at <= opened_at:
+        filled_at = opened_at + timedelta(microseconds=1)
+
     if open_position["side"] == "LONG":
         order_side = "SELL"
         gross_pnl = (avg_price - float(open_position["entry_price"])) * qty
