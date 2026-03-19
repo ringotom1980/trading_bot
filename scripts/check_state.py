@@ -6,9 +6,15 @@ Path: scripts/check_state.py
 from __future__ import annotations
 
 import json
+import sys
 from datetime import datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from storage.db import connection_scope
 from storage.repositories.system_state_repo import get_system_state
