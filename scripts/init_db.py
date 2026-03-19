@@ -5,7 +5,12 @@ Path: scripts/init_db.py
 
 from __future__ import annotations
 
+import sys
 from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from config.logging import get_logger, setup_logging
 from storage.db import connection_scope, test_connection
@@ -17,7 +22,7 @@ def get_schema_dir_path() -> Path:
     回傳：
         schema 目錄 Path 物件。
     """
-    return Path(__file__).resolve().parent.parent / "storage" / "schema"
+    return PROJECT_ROOT / "storage" / "schema"
 
 
 def get_schema_file_paths() -> list[Path]:
