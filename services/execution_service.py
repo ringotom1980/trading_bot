@@ -435,3 +435,132 @@ def record_runtime_decision(
         "last_trade_id": last_trade_id,
         "skipped": False,
     }
+
+
+def force_simulated_trade_cycle(
+    conn: PgConnection,
+    *,
+    settings: Settings,
+    system_state: dict[str, Any],
+    active_strategy: dict[str, Any],
+    client: BinanceClient,
+    forced_decision: str,
+) -> dict[str, Any]:
+    """
+    功能：強制執行模擬交易流程，供 demo 驗收用，不走策略訊號判斷。
+    參數：
+        forced_decision: 僅允許 ENTER_LONG、ENTER_SHORT、EXIT。
+    回傳：
+        執行結果摘要字典。
+    """
+    allowed_decisions = {"ENTER_LONG", "ENTER_SHORT", "EXIT"}
+    if forced_decision not in allowed_decisions:
+        raise ValueError(f"forced_decision 僅允許 {allowed_decisions}，收到：{forced_decision}")
+
+    klines = get_latest_klines(
+        client=client,
+        symbol=settings.primary_symbol,
+        interval=settings.primary_interval,
+        limit=60,
+    )
+    latest_kline = klines[-1]
+    target_bar_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
+    target_bar_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
+
+    feature_pack = calculate_feature_pack(
+        symbol=settings.primary_symbol,
+        interval=settings.primary_interval,
+        klines=klines,
+    )
+
+    reason_map = {
+        "ENTER_LONG": "demo force enter long",
+        "ENTER_SHORT": "demo force enter short",
+        "EXIT": "demo force exit",
+    }
+
+    decision_id = insert_decision_log(
+        conn,
+        symbol=settings.primary_symbol,
+        interval=settings.primary_interval,
+        bar_open_time=target_bar_open_time,
+        bar_close_time=target_bar_close_time,
+        engine_mode=system_state["engine_mode"],
+        trade_mode=system_state["trade_mode"],
+        strategy_version_id=int(active_strategy["strategy_version_id"]),
+        position_id_before=system_state["current_position_id"],
+        position_side_before=system_state["current_position_side"],
+        decision=forced_decision,
+        decision_score=1.0,
+        reason_code="MANUAL",
+        reason_summary=reason_map[forced_decision],
+        features=feature_pack,
+        executed=False,
+        position_id_after=None,
+        position_side_after=system_state["current_position_side"],
+        linked_order_id=None,
+    )
+
+    executed = False
+    linked_order_id = None
+    last_trade_id = None
+    position_id_after = system_state["current_position_id"]
+    position_side_after = system_state["current_position_side"]
+
+    if forced_decision in {"ENTER_LONG", "ENTER_SHORT"}:
+        if system_state["current_position_id"] is not None:
+            raise RuntimeError("目前已有 OPEN 持倉，不能強制進場")
+
+        linked_order_id, position_id_after, position_side_after = _create_simulated_entry_flow(
+            conn,
+            settings=settings,
+            system_state=system_state,
+            active_strategy=active_strategy,
+            latest_kline=latest_kline,
+            decision_result={"decision": forced_decision},
+        )
+        executed = True
+
+    elif forced_decision == "EXIT":
+        if system_state["current_position_id"] is None:
+            raise RuntimeError("目前沒有 OPEN 持倉，不能強制平倉")
+
+        linked_order_id, _closed_position_id, last_trade_id = _create_simulated_exit_flow(
+            conn,
+            settings=settings,
+            system_state=system_state,
+            active_strategy=active_strategy,
+            latest_kline=latest_kline,
+        )
+        executed = True
+        position_id_after = None
+        position_side_after = None
+
+    mark_decision_executed(
+        conn,
+        decision_id=decision_id,
+        executed=executed,
+        position_id_after=position_id_after,
+        position_side_after=position_side_after,
+        linked_order_id=linked_order_id,
+    )
+
+    update_runtime_refs(
+        conn,
+        state_id=1,
+        last_bar_close_time=target_bar_close_time,
+        last_decision_id=decision_id,
+        last_order_id=linked_order_id,
+        last_trade_id=last_trade_id,
+        updated_by="force_simulated_trade_cycle",
+    )
+
+    return {
+        "decision_id": decision_id,
+        "decision": forced_decision,
+        "executed": executed,
+        "linked_order_id": linked_order_id,
+        "position_id_after": position_id_after,
+        "position_side_after": position_side_after,
+        "last_trade_id": last_trade_id,
+    }
