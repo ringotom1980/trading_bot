@@ -5,7 +5,7 @@ Path: services/execution_service.py
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any
 
 from psycopg2.extensions import connection as PgConnection
@@ -46,6 +46,36 @@ def _ms_to_datetime(ms: int) -> datetime:
     """
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
 
+def _get_demo_safe_bar_times(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+    latest_kline: dict[str, Any],
+) -> tuple[datetime, datetime]:
+    """
+    功能：為 demo 強制交易流程產生可安全寫入 decisions_log 的 bar 時間。
+    若同一根 bar_close_time 已存在 decision，則以微小位移避免撞唯一鍵。
+    這只用於 demo force 流程，不影響正式 runtime。
+    回傳：
+        (bar_open_time, bar_close_time)
+    """
+    base_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
+    base_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
+
+    existing_decision = get_decision_by_bar_close_time(
+        conn,
+        symbol=symbol,
+        interval=interval,
+        bar_close_time=base_close_time,
+    )
+
+    if existing_decision is None:
+        return base_open_time, base_close_time
+
+    safe_open_time = base_open_time + timedelta(microseconds=1)
+    safe_close_time = base_close_time + timedelta(microseconds=1)
+    return safe_open_time, safe_close_time
 
 def build_decision_context(
     settings: Settings,
@@ -464,8 +494,12 @@ def force_simulated_trade_cycle(
         limit=60,
     )
     latest_kline = klines[-1]
-    target_bar_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
-    target_bar_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
+    target_bar_open_time, target_bar_close_time = _get_demo_safe_bar_times(
+        conn,
+        symbol=settings.primary_symbol,
+        interval=settings.primary_interval,
+        latest_kline=latest_kline,
+    )
 
     feature_pack = calculate_feature_pack(
         symbol=settings.primary_symbol,
