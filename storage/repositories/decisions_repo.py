@@ -1,6 +1,6 @@
 """
 Path: storage/repositories/decisions_repo.py
-說明：決策紀錄資料表存取層，負責新增與查詢 decisions_log。
+說明：決策紀錄資料表存取層，負責新增、查詢與更新 decisions_log。
 """
 
 from __future__ import annotations
@@ -160,7 +160,85 @@ def get_latest_decision_log(conn: PgConnection) -> dict[str, Any] | None:
         "linked_order_id": row[18],
         "created_at": row[19],
     }
-    
+
+
+def get_decision_by_bar_close_time(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+    bar_close_time: datetime,
+) -> dict[str, Any] | None:
+    """
+    功能：依 symbol、interval、bar_close_time 查詢是否已存在 decision。
+    參數：
+        conn: PostgreSQL 連線物件。
+        symbol: 交易標的。
+        interval: 週期。
+        bar_close_time: K 線收線時間。
+    回傳：
+        decision 資料字典；若不存在則回傳 None。
+    """
+    sql = """
+    SELECT
+        decision_id,
+        symbol,
+        interval,
+        bar_open_time,
+        bar_close_time,
+        engine_mode,
+        trade_mode,
+        strategy_version_id,
+        position_id_before,
+        position_side_before,
+        decision,
+        decision_score,
+        reason_code,
+        reason_summary,
+        features_json,
+        executed,
+        position_id_after,
+        position_side_after,
+        linked_order_id,
+        created_at
+    FROM decisions_log
+    WHERE symbol = %s
+      AND interval = %s
+      AND bar_close_time = %s
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (symbol, interval, bar_close_time))
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "decision_id": row[0],
+        "symbol": row[1],
+        "interval": row[2],
+        "bar_open_time": row[3],
+        "bar_close_time": row[4],
+        "engine_mode": row[5],
+        "trade_mode": row[6],
+        "strategy_version_id": row[7],
+        "position_id_before": row[8],
+        "position_side_before": row[9],
+        "decision": row[10],
+        "decision_score": float(row[11]) if row[11] is not None else None,
+        "reason_code": row[12],
+        "reason_summary": row[13],
+        "features_json": row[14],
+        "executed": row[15],
+        "position_id_after": row[16],
+        "position_side_after": row[17],
+        "linked_order_id": row[18],
+        "created_at": row[19],
+    }
+
+
 def mark_decision_executed(
     conn: PgConnection,
     *,

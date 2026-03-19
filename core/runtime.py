@@ -1,6 +1,6 @@
 """
 Path: core/runtime.py
-說明：即時執行流程骨架，負責讀取 system_state、更新 heartbeat，透過守門模組判斷是否可進交易流程，並在通過時寫入 decisions_log 與模擬開倉流程。
+說明：即時執行流程骨架，負責讀取 system_state、更新 heartbeat，透過守門模組判斷是否可進交易流程，並在通過時寫入 decisions_log 與模擬進出場流程。
 """
 
 from __future__ import annotations
@@ -58,6 +58,15 @@ def run_runtime_once(
         active_strategy=active_strategy,
         client=client,
     )
+
+    if result.get("skipped"):
+        logger.info(
+            "同一根 bar 的 decision 已存在，略過重複寫入：decision_id=%s, decision=%s, executed=%s",
+            result["decision_id"],
+            result["decision"],
+            result["executed"],
+        )
+        return
 
     logger.info(
         "runtime 決策完成：decision_id=%s, decision=%s, executed=%s, linked_order_id=%s, position_id_after=%s, position_side_after=%s",

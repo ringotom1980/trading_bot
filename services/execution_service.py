@@ -1,6 +1,6 @@
 """
 Path: services/execution_service.py
-說明：執行服務層，整合市場資料、特徵、訊號與決策，並在符合條件時建立模擬開倉或模擬平倉流程。
+說明：執行服務層，整合市場資料、特徵、訊號與決策，並在符合條件時建立模擬開倉或模擬平倉流程，同時避免同一根 bar 重複寫入 decision。
 """
 
 from __future__ import annotations
@@ -13,7 +13,11 @@ from psycopg2.extensions import connection as PgConnection
 from config.settings import Settings
 from exchange.binance_client import BinanceClient
 from exchange.market_data import get_latest_klines
-from storage.repositories.decisions_repo import insert_decision_log, mark_decision_executed
+from storage.repositories.decisions_repo import (
+    get_decision_by_bar_close_time,
+    insert_decision_log,
+    mark_decision_executed,
+)
 from storage.repositories.orders_repo import create_order
 from storage.repositories.positions_repo import (
     close_position,
@@ -316,12 +320,33 @@ def record_runtime_decision(
     feature_pack = context["feature_pack"]
     decision_result = context["decision_result"]
 
+    target_bar_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
+    target_bar_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
+
+    existing_decision = get_decision_by_bar_close_time(
+        conn,
+        symbol=settings.primary_symbol,
+        interval=settings.primary_interval,
+        bar_close_time=target_bar_close_time,
+    )
+
+    if existing_decision is not None:
+        return {
+            "decision_id": existing_decision["decision_id"],
+            "decision": existing_decision["decision"],
+            "executed": existing_decision["executed"],
+            "linked_order_id": existing_decision["linked_order_id"],
+            "position_id_after": existing_decision["position_id_after"],
+            "position_side_after": existing_decision["position_side_after"],
+            "skipped": True,
+        }
+
     decision_id = insert_decision_log(
         conn,
         symbol=settings.primary_symbol,
         interval=settings.primary_interval,
-        bar_open_time=_ms_to_datetime(int(latest_kline["open_time"])),
-        bar_close_time=_ms_to_datetime(int(latest_kline["close_time"])),
+        bar_open_time=target_bar_open_time,
+        bar_close_time=target_bar_close_time,
         engine_mode=system_state["engine_mode"],
         trade_mode=system_state["trade_mode"],
         strategy_version_id=int(active_strategy["strategy_version_id"]),
@@ -382,4 +407,5 @@ def record_runtime_decision(
         "linked_order_id": linked_order_id,
         "position_id_after": position_id_after,
         "position_side_after": position_side_after,
+        "skipped": False,
     }
