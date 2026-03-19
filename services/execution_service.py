@@ -1,6 +1,6 @@
 """
 Path: services/execution_service.py
-說明：執行服務層，整合市場資料、特徵、訊號與決策，並在符合條件時建立模擬開倉或模擬平倉流程，同時避免同一根 bar 重複寫入 decision。
+說明：執行服務層，整合市場資料、特徵、訊號與決策，並在符合條件時建立模擬開倉或模擬平倉流程，同時避免同一根 bar 重複寫入 decision，並同步更新 system_state 的最後參照欄位。
 """
 
 from __future__ import annotations
@@ -26,7 +26,10 @@ from storage.repositories.positions_repo import (
     update_position_entry_order_id,
     update_position_exit_order_id,
 )
-from storage.repositories.system_state_repo import update_current_position
+from storage.repositories.system_state_repo import (
+    update_current_position,
+    update_runtime_refs,
+)
 from storage.repositories.trades_repo import create_trade_log
 from strategy.decision import calculate_decision
 from strategy.features import calculate_feature_pack
@@ -188,11 +191,11 @@ def _create_simulated_exit_flow(
     system_state: dict[str, Any],
     active_strategy: dict[str, Any],
     latest_kline: dict[str, Any],
-) -> tuple[int, int]:
+) -> tuple[int, int, int]:
     """
     功能：依目前 OPEN 持倉建立模擬平倉 order、關閉 position 並寫入 trades_log。
     回傳：
-        (exit_order_id, closed_position_id)
+        (exit_order_id, closed_position_id, trade_id)
     """
     open_position = get_open_position_by_symbol(conn, settings.primary_symbol)
     if open_position is None:
@@ -263,7 +266,7 @@ def _create_simulated_exit_flow(
         close_reason="SIGNAL_EXIT",
     )
 
-    create_trade_log(
+    trade_id = create_trade_log(
         conn,
         position_id=int(open_position["position_id"]),
         symbol=str(open_position["symbol"]),
@@ -294,7 +297,7 @@ def _create_simulated_exit_flow(
         updated_by="runtime_exit_flow",
     )
 
-    return exit_order_id, int(open_position["position_id"])
+    return exit_order_id, int(open_position["position_id"]), trade_id
 
 
 def record_runtime_decision(
@@ -331,6 +334,16 @@ def record_runtime_decision(
     )
 
     if existing_decision is not None:
+        update_runtime_refs(
+            conn,
+            state_id=1,
+            last_bar_close_time=target_bar_close_time,
+            last_decision_id=existing_decision["decision_id"],
+            last_order_id=existing_decision["linked_order_id"],
+            last_trade_id=None,
+            updated_by="runtime_skip_existing_decision",
+        )
+
         return {
             "decision_id": existing_decision["decision_id"],
             "decision": existing_decision["decision"],
@@ -338,6 +351,7 @@ def record_runtime_decision(
             "linked_order_id": existing_decision["linked_order_id"],
             "position_id_after": existing_decision["position_id_after"],
             "position_side_after": existing_decision["position_side_after"],
+            "last_trade_id": None,
             "skipped": True,
         }
 
@@ -365,6 +379,7 @@ def record_runtime_decision(
 
     executed = False
     linked_order_id = None
+    last_trade_id = None
     position_id_after = None
     position_side_after = system_state["current_position_side"]
 
@@ -380,7 +395,7 @@ def record_runtime_decision(
         executed = True
 
     elif decision_result["decision"] == "EXIT" and system_state["current_position_id"] is not None:
-        linked_order_id, _closed_position_id = _create_simulated_exit_flow(
+        linked_order_id, _closed_position_id, last_trade_id = _create_simulated_exit_flow(
             conn,
             settings=settings,
             system_state=system_state,
@@ -400,6 +415,16 @@ def record_runtime_decision(
         linked_order_id=linked_order_id,
     )
 
+    update_runtime_refs(
+        conn,
+        state_id=1,
+        last_bar_close_time=target_bar_close_time,
+        last_decision_id=decision_id,
+        last_order_id=linked_order_id,
+        last_trade_id=last_trade_id,
+        updated_by="record_runtime_decision",
+    )
+
     return {
         "decision_id": decision_id,
         "decision": decision_result["decision"],
@@ -407,5 +432,6 @@ def record_runtime_decision(
         "linked_order_id": linked_order_id,
         "position_id_after": position_id_after,
         "position_side_after": position_side_after,
+        "last_trade_id": last_trade_id,
         "skipped": False,
     }

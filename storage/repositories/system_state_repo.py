@@ -1,10 +1,11 @@
 """
 Path: storage/repositories/system_state_repo.py
-說明：系統主狀態資料表存取層，負責查詢與初始化唯一一筆 system_state。
+說明：系統主狀態資料表存取層，負責查詢、初始化與更新唯一一筆 system_state。
 """
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from psycopg2.extensions import connection as PgConnection
@@ -126,6 +127,7 @@ def create_initial_system_state(
             ),
         )
 
+
 def update_current_position(
     conn: PgConnection,
     *,
@@ -159,6 +161,53 @@ def update_current_position(
             (
                 current_position_id,
                 current_position_side,
+                updated_by,
+                state_id,
+            ),
+        )
+
+
+def update_runtime_refs(
+    conn: PgConnection,
+    *,
+    state_id: int,
+    last_bar_close_time: datetime | None,
+    last_decision_id: int | None,
+    last_order_id: int | None,
+    last_trade_id: int | None,
+    updated_by: str,
+) -> None:
+    """
+    功能：更新 system_state 的 runtime 最後參照欄位。
+    參數：
+        conn: PostgreSQL 連線物件。
+        state_id: system_state 主鍵。
+        last_bar_close_time: 最後處理的 bar 收線時間。
+        last_decision_id: 最後一筆 decision_id。
+        last_order_id: 最後一筆 order_id。
+        last_trade_id: 最後一筆 trade_id。
+        updated_by: 更新來源說明。
+    """
+    sql = """
+    UPDATE system_state
+    SET
+        last_bar_close_time = %s,
+        last_decision_id = %s,
+        last_order_id = %s,
+        last_trade_id = %s,
+        updated_at = NOW(),
+        updated_by = %s
+    WHERE id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                last_bar_close_time,
+                last_decision_id,
+                last_order_id,
+                last_trade_id,
                 updated_by,
                 state_id,
             ),
