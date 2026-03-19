@@ -26,6 +26,7 @@ from storage.repositories.positions_repo import (
     update_position_entry_order_id,
     update_position_exit_order_id,
 )
+from storage.repositories.system_events_repo import create_system_event
 from storage.repositories.system_state_repo import (
     update_current_position,
     update_runtime_refs,
@@ -45,6 +46,7 @@ def _ms_to_datetime(ms: int) -> datetime:
         帶時區的 datetime 物件。
     """
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+
 
 def _get_demo_safe_bar_times(
     conn: PgConnection,
@@ -76,6 +78,7 @@ def _get_demo_safe_bar_times(
     safe_open_time = base_open_time + timedelta(microseconds=1)
     safe_close_time = base_close_time + timedelta(microseconds=1)
     return safe_open_time, safe_close_time
+
 
 def build_decision_context(
     settings: Settings,
@@ -211,6 +214,34 @@ def _create_simulated_entry_flow(
         updated_by="runtime_entry_flow",
     )
 
+    create_system_event(
+        conn,
+        event_type="POSITION_OPENED",
+        event_level="INFO",
+        source="SYSTEM",
+        message=f"模擬開倉成功：{position_side}",
+        details={
+            "symbol": settings.primary_symbol,
+            "position_id": position_id,
+            "order_id": order_id,
+            "position_side": position_side,
+            "avg_price": avg_price,
+            "qty": qty,
+            "decision": decision,
+        },
+        created_by="runtime_entry_flow",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
+    )
+
     return order_id, position_id, position_side
 
 
@@ -331,6 +362,37 @@ def _create_simulated_exit_flow(
         updated_by="runtime_exit_flow",
     )
 
+    create_system_event(
+        conn,
+        event_type="POSITION_CLOSED",
+        event_level="INFO",
+        source="SYSTEM",
+        message="模擬平倉成功",
+        details={
+            "symbol": settings.primary_symbol,
+            "position_id": int(open_position["position_id"]),
+            "order_id": exit_order_id,
+            "trade_id": trade_id,
+            "position_side": open_position["side"],
+            "avg_price": avg_price,
+            "qty": qty,
+            "gross_pnl": gross_pnl,
+            "fees": fees,
+            "net_pnl": net_pnl,
+        },
+        created_by="runtime_exit_flow",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
+    )
+
     return exit_order_id, int(open_position["position_id"]), trade_id
 
 
@@ -376,6 +438,32 @@ def record_runtime_decision(
             last_order_id=existing_decision["linked_order_id"],
             last_trade_id=None,
             updated_by="runtime_skip_existing_decision",
+        )
+
+        create_system_event(
+            conn,
+            event_type="GUARD_TRIGGERED",
+            event_level="INFO",
+            source="SYSTEM",
+            message="同一根 bar 的 decision 已存在，略過重複寫入",
+            details={
+                "symbol": settings.primary_symbol,
+                "interval": settings.primary_interval,
+                "decision_id": existing_decision["decision_id"],
+                "decision": existing_decision["decision"],
+                "bar_close_time": target_bar_close_time.isoformat(),
+            },
+            created_by="record_runtime_decision",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
         )
 
         return {
@@ -591,6 +679,34 @@ def force_simulated_trade_cycle(
         last_order_id=linked_order_id,
         last_trade_id=last_trade_id,
         updated_by="force_simulated_trade_cycle",
+    )
+
+    create_system_event(
+        conn,
+        event_type="MANUAL_ACTION",
+        event_level="INFO",
+        source="MANUAL",
+        message=f"demo force trade 執行：{forced_decision}",
+        details={
+            "decision_id": decision_id,
+            "forced_decision": forced_decision,
+            "linked_order_id": linked_order_id,
+            "position_id_after": position_id_after,
+            "position_side_after": position_side_after,
+            "last_trade_id": last_trade_id,
+            "bar_close_time": target_bar_close_time.isoformat(),
+        },
+        created_by="demo_force_trade_cycle",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
     )
 
     return {

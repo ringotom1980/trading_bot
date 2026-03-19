@@ -1,6 +1,6 @@
 """
 Path: scripts/check_state.py
-說明：快速檢查目前系統主狀態、ACTIVE 策略、最新 decision/order/trade，以及目前是否存在 OPEN 持倉，並顯示主要資料筆數統計。
+說明：快速檢查目前系統主狀態、ACTIVE 策略、最新 decision/order/trade/system_event，以及目前是否存在 OPEN 持倉，並顯示主要資料筆數統計。
 """
 
 from __future__ import annotations
@@ -17,14 +17,18 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from storage.db import connection_scope
-from storage.repositories.system_state_repo import get_system_state
+from storage.repositories.decisions_repo import get_latest_decision_log
+from storage.repositories.orders_repo import get_latest_order
+from storage.repositories.positions_repo import get_open_position_by_symbol
 from storage.repositories.strategy_versions_repo import (
     get_active_strategy_version,
     get_strategy_version_by_id,
 )
-from storage.repositories.decisions_repo import get_latest_decision_log
-from storage.repositories.orders_repo import get_latest_order
-from storage.repositories.positions_repo import get_open_position_by_symbol
+from storage.repositories.system_events_repo import (
+    get_latest_system_event,
+    get_system_event_count,
+)
+from storage.repositories.system_state_repo import get_system_state
 from storage.repositories.trades_repo import get_latest_trade_log
 
 
@@ -98,17 +102,20 @@ def main() -> None:
         latest_decision = get_latest_decision_log(conn)
         latest_order = get_latest_order(conn)
         latest_trade = get_latest_trade_log(conn)
+        latest_system_event = get_latest_system_event(conn)
 
         decision_count = _get_table_count(conn, "decisions_log")
         order_count = _get_table_count(conn, "orders")
         trade_count = _get_table_count(conn, "trades_log")
         open_position_count = _get_open_position_count(conn)
+        system_event_count = get_system_event_count(conn)
 
         stats_summary = {
             "decision_count": decision_count,
             "order_count": order_count,
             "trade_count": trade_count,
             "open_position_count": open_position_count,
+            "system_event_count": system_event_count,
         }
 
         open_position = None
@@ -137,6 +144,7 @@ def main() -> None:
     _print_section("latest_decision", latest_decision)
     _print_section("latest_order", latest_order)
     _print_section("latest_trade", latest_trade)
+    _print_section("latest_system_event", latest_system_event)
 
     print("\n檢查完成。")
 
