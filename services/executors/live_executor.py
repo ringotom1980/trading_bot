@@ -11,8 +11,15 @@ from psycopg2.extensions import connection as PgConnection
 
 from config.settings import Settings
 from exchange.binance_client import BinanceClient
-from exchange.order_executor import close_position_reduce_only, place_market_order
-from storage.repositories.orders_repo import create_order, update_order_execution_result
+from exchange.order_executor import (
+    close_position_reduce_only,
+    get_order_by_exchange_id,
+    place_market_order,
+)
+from storage.repositories.orders_repo import (
+    create_order,
+    update_order_execution_result,
+)
 from storage.repositories.positions_repo import (
     close_position,
     create_position,
@@ -40,6 +47,242 @@ def _calculate_bars_held(entry_time: datetime, exit_time: datetime) -> int:
     seconds = (exit_time - entry_time).total_seconds()
     bars_held = int(seconds // (15 * 60))
     return max(bars_held, 0)
+
+
+def sync_live_order_status(
+    conn: PgConnection,
+    *,
+    settings: Settings,
+    system_state: dict,
+    active_strategy: dict,
+    order_id: int,
+    decision_id: int,
+    latest_kline: dict,
+    position_side: str | None,
+    is_exit: bool,
+) -> tuple[int | None, int | None, str | None, int | None, str | None]:
+    """
+    功能：向 Binance 查詢 live order 最新狀態，若已成交則同步 position / trade。
+    回傳：
+        (
+            linked_order_id,
+            position_id_after,
+            position_side_after,
+            trade_id,
+            guard_reason,
+        )
+    """
+    client = BinanceClient(settings)
+
+    from storage.repositories.orders_repo import get_order_by_id
+
+    local_order = get_order_by_id(conn, order_id)
+    if local_order is None:
+        return order_id, None, position_side, None, f"找不到本地 order_id={order_id}"
+
+    exchange_order_id = local_order["exchange_order_id"]
+    if not exchange_order_id:
+        return order_id, None, position_side, None, "此訂單缺少 exchange_order_id，無法同步"
+
+    try:
+        raw_response = get_order_by_exchange_id(
+            client,
+            symbol=settings.primary_symbol,
+            exchange_order_id=exchange_order_id,
+        )
+    except Exception as exc:
+        return order_id, None, position_side, None, f"查單失敗：{exc}"
+
+    exchange_status_raw = str(raw_response.get("status", local_order["status"]))
+    avg_price = float(raw_response.get("avgPrice") or latest_kline["close"])
+    filled_at = _utc_now() if exchange_status_raw == "FILLED" else None
+
+    update_order_execution_result(
+        conn,
+        order_id=order_id,
+        status=exchange_status_raw,
+        exchange_status_raw=exchange_status_raw,
+        avg_price=avg_price,
+        filled_at=filled_at,
+        raw_response=raw_response,
+    )
+
+    if exchange_status_raw != "FILLED":
+        return order_id, None, position_side, None, None
+
+    qty = float(local_order["qty"])
+
+    if not is_exit:
+        if position_side is None:
+            return order_id, None, None, None, "缺少 position_side，無法建立 LIVE 持倉"
+
+        entry_notional = avg_price * qty
+
+        position_id = create_position(
+            conn,
+            symbol=settings.primary_symbol,
+            interval=settings.primary_interval,
+            engine_mode=system_state["engine_mode"],
+            trade_mode=system_state["trade_mode"],
+            strategy_version_id=int(active_strategy["strategy_version_id"]),
+            side=position_side,
+            entry_decision_id=decision_id,
+            entry_price=avg_price,
+            entry_qty=qty,
+            entry_notional=entry_notional,
+            opened_at=filled_at or _utc_now(),
+            exchange_position_ref=None,
+        )
+
+        update_position_entry_order_id(
+            conn,
+            position_id=position_id,
+            entry_order_id=order_id,
+        )
+
+        update_current_position(
+            conn,
+            state_id=1,
+            current_position_id=position_id,
+            current_position_side=position_side,
+            updated_by="sync_live_order_status_entry",
+        )
+
+        create_system_event(
+            conn,
+            event_type="POSITION_OPENED",
+            event_level="INFO",
+            source="SYSTEM",
+            message=f"LIVE 查單同步後建立持倉：{position_side}",
+            details={
+                "decision_id": decision_id,
+                "order_id": order_id,
+                "position_id": position_id,
+                "avg_price": avg_price,
+                "qty": qty,
+                "exchange_status_raw": exchange_status_raw,
+            },
+            created_by="sync_live_order_status",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+
+        return order_id, position_id, position_side, None, None
+
+    open_position = get_open_position_by_symbol(conn, settings.primary_symbol)
+    if open_position is None:
+        return order_id, None, None, None, "查單已成交，但找不到 OPEN 持倉"
+
+    exit_time = filled_at or _utc_now()
+    entry_time = open_position["opened_at"]
+    if exit_time <= entry_time:
+        exit_time = entry_time + timedelta(microseconds=1)
+
+    if open_position["side"] == "LONG":
+        gross_pnl = (avg_price - float(open_position["entry_price"])) * qty
+    else:
+        gross_pnl = (float(open_position["entry_price"]) - avg_price) * qty
+
+    fees = 0.0
+    net_pnl = gross_pnl - fees
+    bars_held = _calculate_bars_held(entry_time, exit_time)
+
+    update_position_exit_order_id(
+        conn,
+        position_id=int(open_position["position_id"]),
+        exit_order_id=order_id,
+    )
+
+    update_position_exit_decision_id(
+        conn,
+        position_id=int(open_position["position_id"]),
+        exit_decision_id=decision_id,
+    )
+
+    close_position(
+        conn,
+        position_id=int(open_position["position_id"]),
+        exit_price=avg_price,
+        exit_qty=qty,
+        gross_pnl=gross_pnl,
+        fees=fees,
+        net_pnl=net_pnl,
+        closed_at=exit_time,
+        close_reason="SIGNAL_EXIT",
+    )
+
+    trade_id = create_trade_log(
+        conn,
+        position_id=int(open_position["position_id"]),
+        symbol=str(open_position["symbol"]),
+        interval=str(open_position["interval"]),
+        engine_mode=str(open_position["engine_mode"]),
+        trade_mode=open_position["trade_mode"],
+        strategy_version_id=int(open_position["strategy_version_id"]),
+        side=str(open_position["side"]),
+        entry_time=entry_time,
+        exit_time=exit_time,
+        entry_price=float(open_position["entry_price"]),
+        exit_price=avg_price,
+        qty=qty,
+        gross_pnl=gross_pnl,
+        fees=fees,
+        net_pnl=net_pnl,
+        bars_held=bars_held,
+        close_reason="SIGNAL_EXIT",
+        entry_decision_id=open_position["entry_decision_id"],
+        exit_decision_id=decision_id,
+        entry_order_id=open_position["entry_order_id"],
+        exit_order_id=order_id,
+    )
+
+    update_current_position(
+        conn,
+        state_id=1,
+        current_position_id=None,
+        current_position_side=None,
+        updated_by="sync_live_order_status_exit",
+    )
+
+    create_system_event(
+        conn,
+        event_type="TRADE_RECORDED",
+        event_level="INFO",
+        source="SYSTEM",
+        message="LIVE 查單同步後完成平倉與寫入交易紀錄",
+        details={
+            "decision_id": decision_id,
+            "order_id": order_id,
+            "trade_id": trade_id,
+            "position_id": int(open_position["position_id"]),
+            "avg_price": avg_price,
+            "qty": qty,
+            "net_pnl": net_pnl,
+            "bars_held": bars_held,
+            "exchange_status_raw": exchange_status_raw,
+        },
+        created_by="sync_live_order_status",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
+    )
+
+    return order_id, None, None, trade_id, None
 
 
 def create_live_entry_flow(
@@ -185,7 +428,18 @@ def create_live_entry_flow(
     )
 
     if exchange_status_raw != "FILLED":
-        return order_id, None, position_side, None
+        linked_order_id, position_id_after, position_side_after, _trade_id, guard_reason = sync_live_order_status(
+            conn,
+            settings=settings,
+            system_state=system_state,
+            active_strategy=active_strategy,
+            order_id=order_id,
+            decision_id=decision_id,
+            latest_kline=latest_kline,
+            position_side=position_side,
+            is_exit=False,
+        )
+        return linked_order_id, position_id_after, position_side_after, guard_reason
 
     entry_notional = avg_price * qty
 
@@ -393,7 +647,18 @@ def create_live_exit_flow(
     )
 
     if exchange_status_raw != "FILLED":
-        return order_id, int(open_position["position_id"]), None, None
+        linked_order_id, position_id_after, position_side_after, trade_id, guard_reason = sync_live_order_status(
+            conn,
+            settings=settings,
+            system_state=system_state,
+            active_strategy=active_strategy,
+            order_id=order_id,
+            decision_id=decision_id,
+            latest_kline=latest_kline,
+            position_side=open_position["side"],
+            is_exit=True,
+        )
+        return linked_order_id, position_id_after, trade_id, guard_reason
 
     exit_time = filled_at or placed_at
     entry_time = open_position["opened_at"]

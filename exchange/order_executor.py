@@ -101,3 +101,19 @@ def close_position_reduce_only(
         reduce_only=True,
         new_client_order_id=new_client_order_id,
     )
+    
+    
+def get_order_by_exchange_id(
+    client: BinanceClient,
+    *,
+    symbol: str,
+    exchange_order_id: str,
+) -> dict[str, Any]:
+    """
+    功能：依 Binance exchange_order_id 查詢訂單。
+    """
+    return get_order(
+        client,
+        symbol=symbol,
+        order_id=int(exchange_order_id),
+    )
