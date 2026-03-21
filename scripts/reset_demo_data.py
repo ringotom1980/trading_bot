@@ -2,7 +2,7 @@
 Path: scripts/reset_demo_data.py
 說明：重設 demo 測試起始狀態，保留 ACTIVE 策略版本，
 並將 system_state 調回可重跑 demo 的固定起點。
-可額外指定 trading_state 與 live_armed，方便驗證 guard。
+可額外指定 trading_state、trade_mode 與 live_armed，方便驗證 guard。
 """
 
 from __future__ import annotations
@@ -60,7 +60,13 @@ def parse_args() -> tuple[str, str, bool]:
     return trading_state, trade_mode, live_armed
 
 
-def reset_demo_system_state(conn, *, trading_state: str, live_armed: bool) -> None:
+def reset_demo_system_state(
+    conn,
+    *,
+    trading_state: str,
+    trade_mode: str,
+    live_armed: bool,
+) -> None:
     """
     功能：將 system_state 重設為 demo 測試固定起始值。
     ENTRY_FROZEN 測試時保留目前持倉參照，避免與 open_position 脫鉤。
@@ -77,7 +83,7 @@ def reset_demo_system_state(conn, *, trading_state: str, live_armed: bool) -> No
     UPDATE system_state
     SET
         engine_mode = 'REALTIME',
-        trade_mode = 'TESTNET',
+        trade_mode = %s,
         trading_state = %s,
         live_armed = %s,
         {reset_position_fields_sql}
@@ -92,7 +98,7 @@ def reset_demo_system_state(conn, *, trading_state: str, live_armed: bool) -> No
     """
 
     with conn.cursor() as cursor:
-        cursor.execute(sql, (trading_state, live_armed))
+        cursor.execute(sql, (trade_mode, trading_state, live_armed))
 
 
 def main() -> None:
@@ -121,8 +127,11 @@ def main() -> None:
     print(f"- trade_mode = {trade_mode}")
     print(f"- trading_state = {trading_state}")
     print(f"- live_armed = {str(live_armed).upper()}")
-    print("- current_position_side = NULL")
-    print("- current_position_id = NULL")
+    if trading_state == "ENTRY_FROZEN":
+        print("- current_position_side / current_position_id = 保留原值")
+    else:
+        print("- current_position_side = NULL")
+        print("- current_position_id = NULL")
     print("- last_bar_close_time = NULL")
     print("- last_decision_id = NULL")
     print("- last_order_id = NULL")
