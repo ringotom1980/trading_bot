@@ -6,9 +6,6 @@ Path: scripts/reset_demo_data.py
 """
 
 from __future__ import annotations
-from storage.repositories.positions_repo import get_open_position_by_symbol
-from storage.repositories.system_state_repo import get_system_state
-from storage.db import connection_scope
 
 import sys
 from pathlib import Path
@@ -16,6 +13,10 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from storage.db import connection_scope
+from storage.repositories.positions_repo import get_open_position_by_symbol
+from storage.repositories.system_state_repo import get_system_state
 
 
 ALLOWED_TRADING_STATES = {"ON", "ENTRY_FROZEN", "OFF"}
