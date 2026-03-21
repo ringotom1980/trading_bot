@@ -60,19 +60,27 @@ def parse_args() -> tuple[str, str, bool]:
     return trading_state, trade_mode, live_armed
 
 
-def reset_demo_system_state(conn, *, trading_state: str, trade_mode: str, live_armed: bool) -> None:
+def reset_demo_system_state(conn, *, trading_state: str, live_armed: bool) -> None:
     """
     功能：將 system_state 重設為 demo 測試固定起始值。
+    ENTRY_FROZEN 測試時保留目前持倉參照，避免與 open_position 脫鉤。
     """
-    sql = """
+    reset_position_fields_sql = """
+        current_position_side = NULL,
+        current_position_id = NULL,
+    """
+
+    if trading_state == "ENTRY_FROZEN":
+        reset_position_fields_sql = ""
+
+    sql = f"""
     UPDATE system_state
     SET
         engine_mode = 'REALTIME',
-        trade_mode = %s,
+        trade_mode = 'TESTNET',
         trading_state = %s,
         live_armed = %s,
-        current_position_side = NULL,
-        current_position_id = NULL,
+        {reset_position_fields_sql}
         last_bar_close_time = NULL,
         last_decision_id = NULL,
         last_order_id = NULL,
@@ -84,7 +92,7 @@ def reset_demo_system_state(conn, *, trading_state: str, trade_mode: str, live_a
     """
 
     with conn.cursor() as cursor:
-        cursor.execute(sql, (trade_mode, trading_state, live_armed))
+        cursor.execute(sql, (trading_state, live_armed))
 
 
 def main() -> None:
