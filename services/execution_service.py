@@ -896,8 +896,27 @@ def force_simulated_trade_cycle(
             strategy_version_after=system_state["active_strategy_version_id"],
         )
 
-        raise RuntimeError(
-            f"demo_force_trade_cycle 被 guard 擋下：{runtime_reason}")
+        update_runtime_refs(
+            conn,
+            state_id=1,
+            last_bar_close_time=target_bar_close_time,
+            last_decision_id=decision_id,
+            last_order_id=None,
+            last_trade_id=None,
+            updated_by="force_simulated_trade_cycle",
+        )
+
+        return {
+            "decision_id": decision_id,
+            "decision": forced_decision,
+            "executed": False,
+            "linked_order_id": None,
+            "position_id_after": system_state["current_position_id"],
+            "position_side_after": system_state["current_position_side"],
+            "last_trade_id": None,
+            "blocked": True,
+            "reason": runtime_reason,
+        }
 
     executed = False
     linked_order_id = None
