@@ -130,7 +130,9 @@ def create_position(
         exchange_position_ref
     )
     VALUES (
-        %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s, 0, %s, %s
+        VALUES (
+            %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s, 0, %s, %s
+        )
     )
     RETURNING position_id
     """
@@ -215,6 +217,8 @@ def close_position(
                 position_id,
             ),
         )
+
+
 def update_position_entry_order_id(
     conn: PgConnection,
     *,
@@ -263,6 +267,7 @@ def update_position_exit_order_id(
 
     with conn.cursor() as cursor:
         cursor.execute(sql, (exit_order_id, position_id))
+
 
 def update_position_exit_decision_id(
     conn: PgConnection,
