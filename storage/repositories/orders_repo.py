@@ -203,3 +203,47 @@ def get_latest_order(conn: PgConnection) -> dict[str, Any] | None:
         "raw_request_json": row[22],
         "raw_response_json": row[23],
     }
+    
+def update_order_execution_result(
+    conn: PgConnection,
+    *,
+    order_id: int,
+    status: str,
+    exchange_status_raw: str | None,
+    avg_price: float | None,
+    filled_at: datetime | None,
+    error_code: str | None = None,
+    error_message: str | None = None,
+    raw_response: dict[str, Any] | None = None,
+) -> None:
+    """
+    功能：回寫 orders 執行結果。
+    """
+    sql = """
+    UPDATE orders
+    SET
+        status = %s,
+        exchange_status_raw = %s,
+        avg_price = %s,
+        filled_at = %s,
+        error_code = %s,
+        error_message = %s,
+        raw_response_json = %s::jsonb,
+        updated_at = NOW()
+    WHERE order_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                status,
+                exchange_status_raw,
+                avg_price,
+                filled_at,
+                error_code,
+                error_message,
+                json.dumps(raw_response, ensure_ascii=False) if raw_response is not None else None,
+                order_id,
+            ),
+        )
