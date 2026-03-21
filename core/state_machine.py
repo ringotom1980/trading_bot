@@ -94,6 +94,28 @@ def has_open_position(system_state: dict[str, Any]) -> bool:
     return system_state["current_position_id"] is not None
 
 
+def is_live_armed(system_state: dict[str, Any]) -> bool:
+    """
+    功能：判斷 LIVE 是否已武裝。
+    """
+    return bool(system_state["live_armed"])
+
+
+def calculate_held_bars(
+    *,
+    opened_at,
+    current_bar_close_time,
+    bar_minutes: int = 15,
+) -> int:
+    """
+    功能：計算目前持倉已持有幾根 bar。
+    規則：
+        floor((current_bar_close_time - opened_at) / bar_minutes)
+    """
+    seconds = (current_bar_close_time - opened_at).total_seconds()
+    held_bars = int(seconds // (bar_minutes * 60))
+    return max(held_bars, 0)
+
 def summarize_state(system_state: dict[str, Any]) -> str:
     """
     功能：將 system_state 整理成簡短狀態摘要文字。

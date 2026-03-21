@@ -11,6 +11,7 @@ from typing import Any
 from psycopg2.extensions import connection as PgConnection
 
 from config.settings import Settings
+from core.guards import evaluate_entry_guard, evaluate_exit_guard
 from exchange.binance_client import BinanceClient
 from exchange.market_data import get_latest_klines
 from storage.repositories.decisions_repo import (
@@ -55,8 +56,8 @@ def _calculate_bars_held(entry_time: datetime, exit_time: datetime) -> int:
     規則：
         floor((exit_time - entry_time) / 15m)
     """
-    seconds= (exit_time - entry_time).total_seconds()
-    bars_held= int(seconds // (15 * 60))
+    seconds = (exit_time - entry_time).total_seconds()
+    bars_held = int(seconds // (15 * 60))
     return max(bars_held, 0)
 
 
@@ -74,14 +75,14 @@ def _get_demo_safe_bar_times(
     回傳：
         (bar_open_time, bar_close_time)
     """
-    base_open_time= _ms_to_datetime(int(latest_kline["open_time"]))
-    base_close_time= _ms_to_datetime(int(latest_kline["close_time"]))
+    base_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
+    base_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
 
-    existing_decision= get_decision_by_bar_close_time(
+    existing_decision = get_decision_by_bar_close_time(
         conn,
-        symbol = symbol,
-        interval = interval,
-        bar_close_time = base_close_time,
+        symbol=symbol,
+        interval=interval,
+        bar_close_time=base_close_time,
     )
 
     if existing_decision is None:
@@ -649,31 +650,47 @@ def record_runtime_decision(
     last_trade_id = None
     position_id_after = None
     position_side_after = system_state["current_position_side"]
+    guard_reason = None
+    min_hold_bars = int(active_strategy["params_json"].get("min_hold_bars", 0))
 
-    if decision_result["decision"] in {"ENTER_LONG", "ENTER_SHORT"} and system_state["current_position_id"] is None:
-        linked_order_id, position_id_after, position_side_after = _create_simulated_entry_flow(
-            conn,
-            settings=settings,
-            system_state=system_state,
-            active_strategy=active_strategy,
-            latest_kline=latest_kline,
-            decision_result=decision_result,
-            decision_id=decision_id,
-        )
-        executed = True
+    if decision_result["decision"] in {"ENTER_LONG", "ENTER_SHORT"}:
+        allow_entry, guard_reason = evaluate_entry_guard(system_state)
 
-    elif decision_result["decision"] == "EXIT" and system_state["current_position_id"] is not None:
-        linked_order_id, _closed_position_id, last_trade_id = _create_simulated_exit_flow(
-            conn,
-            settings=settings,
-            system_state=system_state,
-            active_strategy=active_strategy,
-            latest_kline=latest_kline,
-            decision_id=decision_id,
+        if allow_entry:
+            linked_order_id, position_id_after, position_side_after = _create_simulated_entry_flow(
+                conn,
+                settings=settings,
+                system_state=system_state,
+                active_strategy=active_strategy,
+                latest_kline=latest_kline,
+                decision_result=decision_result,
+                decision_id=decision_id,
+            )
+            executed = True
+
+    elif decision_result["decision"] == "EXIT":
+        open_position = get_open_position_by_symbol(
+            conn, settings.primary_symbol)
+
+        allow_exit, guard_reason = evaluate_exit_guard(
+            system_state,
+            open_position=open_position,
+            current_bar_close_time=target_bar_close_time,
+            min_hold_bars=min_hold_bars,
         )
-        executed = True
-        position_id_after = None
-        position_side_after = None
+
+        if allow_exit:
+            linked_order_id, _closed_position_id, last_trade_id = _create_simulated_exit_flow(
+                conn,
+                settings=settings,
+                system_state=system_state,
+                active_strategy=active_strategy,
+                latest_kline=latest_kline,
+                decision_id=decision_id,
+            )
+            executed = True
+            position_id_after = None
+            position_side_after = None
 
     mark_decision_executed(
         conn,
@@ -683,6 +700,33 @@ def record_runtime_decision(
         position_side_after=position_side_after,
         linked_order_id=linked_order_id,
     )
+
+    if not executed and guard_reason:
+        create_system_event(
+            conn,
+            event_type="GUARD_TRIGGERED",
+            event_level="INFO",
+            source="SYSTEM",
+            message=guard_reason,
+            details={
+                "decision_id": decision_id,
+                "decision": decision_result["decision"],
+                "symbol": settings.primary_symbol,
+                "interval": settings.primary_interval,
+                "bar_close_time": target_bar_close_time.isoformat(),
+            },
+            created_by="record_runtime_decision",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
 
     update_runtime_refs(
         conn,
