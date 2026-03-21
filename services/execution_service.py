@@ -15,6 +15,7 @@ from core.guards import (
     evaluate_cooldown_guard,
     evaluate_entry_guard,
     evaluate_exit_guard,
+    evaluate_runtime_guard,
 )
 from exchange.binance_client import BinanceClient
 from exchange.market_data import get_latest_klines
@@ -866,6 +867,37 @@ def force_simulated_trade_cycle(
         strategy_version_before=system_state["active_strategy_version_id"],
         strategy_version_after=system_state["active_strategy_version_id"],
     )
+
+    allow_runtime, runtime_reason = evaluate_runtime_guard(system_state)
+    if not allow_runtime:
+        create_system_event(
+            conn,
+            event_type="GUARD_TRIGGERED",
+            event_level="WARNING",
+            source="MANUAL",
+            message=runtime_reason,
+            details={
+                "decision_id": decision_id,
+                "forced_decision": forced_decision,
+                "symbol": settings.primary_symbol,
+                "interval": settings.primary_interval,
+                "bar_close_time": target_bar_close_time.isoformat(),
+            },
+            created_by="demo_force_trade_cycle",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+
+        raise RuntimeError(
+            f"demo_force_trade_cycle 被 guard 擋下：{runtime_reason}")
 
     executed = False
     linked_order_id = None
