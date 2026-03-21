@@ -4,9 +4,17 @@ Path: scripts/check_exit_guard.py
 """
 
 from __future__ import annotations
+from services.strategy_service import load_active_strategy
+from storage.repositories.system_state_repo import get_system_state
+from storage.repositories.positions_repo import get_open_position_by_symbol
+from storage.db import connection_scope
+from config.settings import load_settings
+from exchange.market_data import get_latest_klines
+from exchange.binance_client import BinanceClient
+from core.guards import evaluate_exit_guard
 
 import json
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 import sys
 from pathlib import Path
@@ -15,15 +23,6 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from core.guards import evaluate_exit_guard
-from exchange.binance_client import BinanceClient
-from exchange.market_data import get_latest_klines
-from config.settings import load_settings
-from storage.db import connection_scope
-from storage.repositories.positions_repo import get_open_position_by_symbol
-from storage.repositories.system_state_repo import get_system_state
-from services.strategy_service import load_active_strategy
 
 
 def _json_default(value: Any) -> str:
@@ -50,7 +49,10 @@ def main() -> None:
         limit=2,
     )
     latest_kline = klines[-1]
-    current_bar_close_time = datetime.fromtimestamp(int(latest_kline["close_time"]) / 1000)
+    current_bar_close_time = datetime.fromtimestamp(
+        int(latest_kline["close_time"]) / 1000,
+        tz=timezone.utc,
+    )
 
     with connection_scope() as conn:
         system_state = get_system_state(conn, state_id=1)
@@ -58,7 +60,8 @@ def main() -> None:
             raise RuntimeError("找不到 system_state(id=1)")
 
         active_strategy = load_active_strategy(conn)
-        open_position = get_open_position_by_symbol(conn, settings.primary_symbol)
+        open_position = get_open_position_by_symbol(
+            conn, settings.primary_symbol)
 
     min_hold_bars = int(active_strategy["params_json"].get("min_hold_bars", 0))
 
