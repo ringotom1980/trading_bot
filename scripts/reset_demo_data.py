@@ -6,6 +6,9 @@ Path: scripts/reset_demo_data.py
 """
 
 from __future__ import annotations
+from storage.repositories.positions_repo import get_open_position_by_symbol
+from storage.repositories.system_state_repo import get_system_state
+from storage.db import connection_scope
 
 import sys
 from pathlib import Path
@@ -13,9 +16,6 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from storage.db import connection_scope
-from storage.repositories.system_state_repo import get_system_state
 
 
 ALLOWED_TRADING_STATES = {"ON", "ENTRY_FROZEN", "OFF"}
@@ -71,13 +71,33 @@ def reset_demo_system_state(
     功能：將 system_state 重設為 demo 測試固定起始值。
     ENTRY_FROZEN 測試時保留目前持倉參照，避免與 open_position 脫鉤。
     """
-    reset_position_fields_sql = """
+    open_position = get_open_position_by_symbol(conn, "BTCUSDT")
+
+    if open_position is not None:
+        reset_position_fields_sql = """
+        current_position_side = %s,
+        current_position_id = %s,
+        """
+        reset_position_params = (
+            open_position["side"],
+            open_position["position_id"],
+        )
+    else:
+        reset_position_fields_sql = """
         current_position_side = NULL,
         current_position_id = NULL,
-    """
+        """
+        reset_position_params = ()
 
-    if trading_state == "ENTRY_FROZEN":
-        reset_position_fields_sql = ""
+    if trading_state == "ENTRY_FROZEN" and open_position is not None:
+        reset_position_fields_sql = """
+        current_position_side = %s,
+        current_position_id = %s,
+        """
+        reset_position_params = (
+            open_position["side"],
+            open_position["position_id"],
+        )
 
     sql = f"""
     UPDATE system_state
@@ -98,7 +118,15 @@ def reset_demo_system_state(
     """
 
     with conn.cursor() as cursor:
-        cursor.execute(sql, (trade_mode, trading_state, live_armed))
+        cursor.execute(
+            sql,
+            (
+                trade_mode,
+                trading_state,
+                live_armed,
+                *reset_position_params,
+            ),
+        )
 
 
 def main() -> None:
