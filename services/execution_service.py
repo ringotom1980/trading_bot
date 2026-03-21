@@ -873,7 +873,7 @@ def force_simulated_trade_cycle(
         create_system_event(
             conn,
             event_type="GUARD_TRIGGERED",
-            event_level="WARNING",
+            event_level="INFO",
             source="MANUAL",
             message=runtime_reason,
             details={
