@@ -203,7 +203,78 @@ def get_latest_order(conn: PgConnection) -> dict[str, Any] | None:
         "raw_request_json": row[22],
         "raw_response_json": row[23],
     }
-    
+  
+def get_order_by_id(conn: PgConnection, order_id: int) -> dict[str, Any] | None:
+    """
+    功能：依 order_id 查詢單筆 orders。
+    回傳：
+        order 資料字典；若不存在則回傳 None。
+    """
+    sql = """
+    SELECT
+        order_id,
+        position_id,
+        symbol,
+        interval,
+        engine_mode,
+        trade_mode,
+        strategy_version_id,
+        client_order_id,
+        exchange_order_id,
+        side,
+        order_type,
+        reduce_only,
+        qty,
+        price,
+        avg_price,
+        status,
+        exchange_status_raw,
+        placed_at,
+        updated_at,
+        filled_at,
+        error_code,
+        error_message,
+        raw_request_json,
+        raw_response_json
+    FROM orders
+    WHERE order_id = %s
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (order_id,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "order_id": row[0],
+        "position_id": row[1],
+        "symbol": row[2],
+        "interval": row[3],
+        "engine_mode": row[4],
+        "trade_mode": row[5],
+        "strategy_version_id": row[6],
+        "client_order_id": row[7],
+        "exchange_order_id": row[8],
+        "side": row[9],
+        "order_type": row[10],
+        "reduce_only": row[11],
+        "qty": float(row[12]),
+        "price": float(row[13]) if row[13] is not None else None,
+        "avg_price": float(row[14]) if row[14] is not None else None,
+        "status": row[15],
+        "exchange_status_raw": row[16],
+        "placed_at": row[17],
+        "updated_at": row[18],
+        "filled_at": row[19],
+        "error_code": row[20],
+        "error_message": row[21],
+        "raw_request_json": row[22],
+        "raw_response_json": row[23],
+    }
+  
 def update_order_execution_result(
     conn: PgConnection,
     *,
