@@ -130,9 +130,7 @@ def create_position(
         exchange_position_ref
     )
     VALUES (
-        VALUES (
-            %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s, 0, %s, %s
-        )
+        %s, %s, %s, %s, %s, %s, %s, 'OPEN', %s, %s, %s, 0, %s, %s
     )
     RETURNING position_id
     """
