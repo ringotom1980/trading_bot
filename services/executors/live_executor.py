@@ -19,6 +19,7 @@ from exchange.order_executor import (
 from storage.repositories.orders_repo import (
     create_order,
     update_order_execution_result,
+    update_order_position_id,
 )
 from storage.repositories.positions_repo import (
     close_position,
@@ -93,7 +94,8 @@ def sync_live_order_status(
     except Exception as exc:
         return order_id, None, position_side, None, f"查單失敗：{exc}"
 
-    exchange_status_raw = str(raw_response.get("status", local_order["status"]))
+    exchange_status_raw = str(raw_response.get(
+        "status", local_order["status"]))
     avg_price = float(raw_response.get("avgPrice") or latest_kline["close"])
     filled_at = _utc_now() if exchange_status_raw == "FILLED" else None
 
@@ -138,6 +140,12 @@ def sync_live_order_status(
             conn,
             position_id=position_id,
             entry_order_id=order_id,
+        )
+
+        update_order_position_id(
+            conn,
+            order_id=order_id,
+            position_id=position_id,
         )
 
         update_current_position(
@@ -353,7 +361,8 @@ def create_live_entry_flow(
 
     placed_at = _utc_now()
     avg_price = float(raw_response.get("avgPrice") or latest_kline["close"])
-    exchange_order_id = str(raw_response.get("orderId")) if raw_response.get("orderId") is not None else None
+    exchange_order_id = str(raw_response.get("orderId")) if raw_response.get(
+        "orderId") is not None else None
     exchange_status_raw = str(raw_response.get("status", "NEW"))
     filled_at = placed_at if exchange_status_raw == "FILLED" else None
 
@@ -365,7 +374,8 @@ def create_live_entry_flow(
         engine_mode=system_state["engine_mode"],
         trade_mode=str(system_state["trade_mode"]),
         strategy_version_id=int(active_strategy["strategy_version_id"]),
-        client_order_id=str(raw_response.get("clientOrderId", client_order_id)),
+        client_order_id=str(raw_response.get(
+            "clientOrderId", client_order_id)),
         exchange_order_id=exchange_order_id,
         side=order_side,
         order_type="MARKET",
@@ -463,6 +473,12 @@ def create_live_entry_flow(
         conn,
         position_id=position_id,
         entry_order_id=order_id,
+    )
+
+    update_order_position_id(
+        conn,
+        order_id=order_id,
+        position_id=position_id,
     )
 
     update_current_position(
@@ -571,7 +587,8 @@ def create_live_exit_flow(
 
     placed_at = _utc_now()
     avg_price = float(raw_response.get("avgPrice") or latest_kline["close"])
-    exchange_order_id = str(raw_response.get("orderId")) if raw_response.get("orderId") is not None else None
+    exchange_order_id = str(raw_response.get("orderId")) if raw_response.get(
+        "orderId") is not None else None
     exchange_status_raw = str(raw_response.get("status", "NEW"))
     filled_at = placed_at if exchange_status_raw == "FILLED" else None
 
@@ -583,7 +600,8 @@ def create_live_exit_flow(
         engine_mode=system_state["engine_mode"],
         trade_mode=str(system_state["trade_mode"]),
         strategy_version_id=int(active_strategy["strategy_version_id"]),
-        client_order_id=str(raw_response.get("clientOrderId", client_order_id)),
+        client_order_id=str(raw_response.get(
+            "clientOrderId", client_order_id)),
         exchange_order_id=exchange_order_id,
         side=order_side,
         order_type="MARKET",
