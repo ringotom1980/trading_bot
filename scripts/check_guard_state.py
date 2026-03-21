@@ -7,6 +7,8 @@ Path: scripts/check_guard_state.py
 from __future__ import annotations
 
 import json
+from datetime import datetime
+from decimal import Decimal
 import sys
 from pathlib import Path
 from typing import Any
@@ -20,9 +22,17 @@ from storage.db import connection_scope
 from storage.repositories.system_state_repo import get_system_state
 
 
+def _json_default(value: Any) -> str:
+    if isinstance(value, datetime):
+        return value.isoformat()
+    if isinstance(value, Decimal):
+        return str(value)
+    return str(value)
+
+
 def _print_json(title: str, data: dict[str, Any]) -> None:
     print(f"\n=== {title} ===")
-    print(json.dumps(data, ensure_ascii=False, indent=2))
+    print(json.dumps(data, ensure_ascii=False, indent=2, default=_json_default))
 
 
 def main() -> None:
