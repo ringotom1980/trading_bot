@@ -109,6 +109,29 @@ def create_order(
 
     return int(row[0])
 
+def update_order_position_id(
+    conn: PgConnection,
+    *,
+    order_id: int,
+    position_id: int,
+) -> None:
+    """
+    功能：回填 orders.position_id，讓開倉委託單可正確連回持倉。
+    參數：
+        conn: PostgreSQL 連線物件。
+        order_id: 委託單主鍵。
+        position_id: 持倉主鍵。
+    """
+    sql = """
+    UPDATE orders
+    SET
+        position_id = %s,
+        updated_at = NOW()
+    WHERE order_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (position_id, order_id))
 
 def get_latest_order(conn: PgConnection) -> dict[str, Any] | None:
     """

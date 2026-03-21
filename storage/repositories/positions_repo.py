@@ -153,6 +153,7 @@ def create_position(
 
     return int(row[0])
 
+
 def close_position(
     conn: PgConnection,
     *,

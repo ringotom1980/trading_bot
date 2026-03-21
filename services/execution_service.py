@@ -18,7 +18,7 @@ from storage.repositories.decisions_repo import (
     insert_decision_log,
     mark_decision_executed,
 )
-from storage.repositories.orders_repo import create_order
+from storage.repositories.orders_repo import create_order, update_order_position_id
 from storage.repositories.positions_repo import (
     close_position,
     create_position,
@@ -46,6 +46,17 @@ def _ms_to_datetime(ms: int) -> datetime:
         帶時區的 datetime 物件。
     """
     return datetime.fromtimestamp(ms / 1000, tz=timezone.utc)
+
+
+def _calculate_bars_held(entry_time: datetime, exit_time: datetime) -> int:
+    """
+    功能：依進出場時間計算持有幾根 15m bar。
+    規則：
+        floor((exit_time - entry_time) / 15m)
+    """
+    seconds = (exit_time - entry_time).total_seconds()
+    bars_held = int(seconds // (15 * 60))
+    return max(bars_held, 0)
 
 
 def _get_demo_safe_bar_times(
@@ -131,6 +142,7 @@ def _create_simulated_entry_flow(
     active_strategy: dict[str, Any],
     latest_kline: dict[str, Any],
     decision_result: dict[str, Any],
+    decision_id: int,
 ) -> tuple[int, int, str]:
     """
     功能：依 ENTER_LONG / ENTER_SHORT 建立模擬開倉 order 與 position。
@@ -183,6 +195,34 @@ def _create_simulated_entry_flow(
         },
     )
 
+    create_system_event(
+        conn,
+        event_type="ENTRY_ORDER_CREATED",
+        event_level="INFO",
+        source="SYSTEM",
+        message=f"模擬開倉委託已建立：{decision}",
+        details={
+            "decision_id": decision_id,
+            "symbol": settings.primary_symbol,
+            "order_id": order_id,
+            "order_side": order_side,
+            "position_side": position_side,
+            "avg_price": avg_price,
+            "qty": qty,
+        },
+        created_by="runtime_entry_flow",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
+    )
+
     entry_notional = avg_price * qty
 
     position_id = create_position(
@@ -206,6 +246,12 @@ def _create_simulated_entry_flow(
         entry_order_id=order_id,
     )
 
+    update_order_position_id(
+        conn,
+        order_id=order_id,
+        position_id=position_id,
+    )
+
     update_current_position(
         conn,
         state_id=1,
@@ -221,6 +267,7 @@ def _create_simulated_entry_flow(
         source="SYSTEM",
         message=f"模擬開倉成功：{position_side}",
         details={
+            "decision_id": decision_id,
             "symbol": settings.primary_symbol,
             "position_id": position_id,
             "order_id": order_id,
@@ -252,6 +299,7 @@ def _create_simulated_exit_flow(
     system_state: dict[str, Any],
     active_strategy: dict[str, Any],
     latest_kline: dict[str, Any],
+    decision_id: int,
 ) -> tuple[int, int, int]:
     """
     功能：依目前 OPEN 持倉建立模擬平倉 order、關閉 position 並寫入 trades_log。
@@ -279,6 +327,7 @@ def _create_simulated_exit_flow(
 
     fees = 2.0
     net_pnl = gross_pnl - fees
+    bars_held = _calculate_bars_held(opened_at, filled_at)
 
     exit_order_id = create_order(
         conn,
@@ -311,6 +360,34 @@ def _create_simulated_exit_flow(
             "status": "FILLED",
             "avgPrice": str(avg_price),
         },
+    )
+
+    create_system_event(
+        conn,
+        event_type="EXIT_ORDER_CREATED",
+        event_level="INFO",
+        source="SYSTEM",
+        message="模擬平倉委託已建立",
+        details={
+            "decision_id": decision_id,
+            "symbol": settings.primary_symbol,
+            "position_id": int(open_position["position_id"]),
+            "order_id": exit_order_id,
+            "order_side": order_side,
+            "avg_price": avg_price,
+            "qty": qty,
+        },
+        created_by="runtime_exit_flow",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
     )
 
     update_position_exit_order_id(
@@ -348,8 +425,10 @@ def _create_simulated_exit_flow(
         gross_pnl=gross_pnl,
         fees=fees,
         net_pnl=net_pnl,
-        bars_held=None,
+        bars_held=bars_held,
         close_reason="SIGNAL_EXIT",
+        entry_decision_id=None,
+        exit_decision_id=decision_id,
         entry_order_id=open_position["entry_order_id"],
         exit_order_id=exit_order_id,
     )
@@ -369,6 +448,7 @@ def _create_simulated_exit_flow(
         source="SYSTEM",
         message="模擬平倉成功",
         details={
+            "decision_id": decision_id,
             "symbol": settings.primary_symbol,
             "position_id": int(open_position["position_id"]),
             "order_id": exit_order_id,
@@ -378,6 +458,35 @@ def _create_simulated_exit_flow(
             "qty": qty,
             "gross_pnl": gross_pnl,
             "fees": fees,
+            "net_pnl": net_pnl,
+            "bars_held": bars_held,
+        },
+        created_by="runtime_exit_flow",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
+    )
+
+    create_system_event(
+        conn,
+        event_type="TRADE_RECORDED",
+        event_level="INFO",
+        source="SYSTEM",
+        message="交易結果已寫入 trades_log",
+        details={
+            "decision_id": decision_id,
+            "trade_id": trade_id,
+            "position_id": int(open_position["position_id"]),
+            "entry_order_id": open_position["entry_order_id"],
+            "exit_order_id": exit_order_id,
+            "bars_held": bars_held,
             "net_pnl": net_pnl,
         },
         created_by="runtime_exit_flow",
@@ -499,6 +608,34 @@ def record_runtime_decision(
         linked_order_id=None,
     )
 
+    create_system_event(
+        conn,
+        event_type="DECISION_RECORDED",
+        event_level="INFO",
+        source="SYSTEM",
+        message=f"runtime decision 已寫入：{decision_result['decision']}",
+        details={
+            "decision_id": decision_id,
+            "symbol": settings.primary_symbol,
+            "interval": settings.primary_interval,
+            "decision": decision_result["decision"],
+            "bar_close_time": target_bar_close_time.isoformat(),
+            "position_id_before": system_state["current_position_id"],
+            "position_side_before": system_state["current_position_side"],
+        },
+        created_by="record_runtime_decision",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
+    )
+
     executed = False
     linked_order_id = None
     last_trade_id = None
@@ -513,6 +650,7 @@ def record_runtime_decision(
             active_strategy=active_strategy,
             latest_kline=latest_kline,
             decision_result=decision_result,
+            decision_id=decision_id,
         )
         executed = True
 
@@ -523,6 +661,7 @@ def record_runtime_decision(
             system_state=system_state,
             active_strategy=active_strategy,
             latest_kline=latest_kline,
+            decision_id=decision_id,
         )
         executed = True
         position_id_after = None
@@ -577,7 +716,8 @@ def force_simulated_trade_cycle(
     """
     allowed_decisions = {"ENTER_LONG", "ENTER_SHORT", "EXIT"}
     if forced_decision not in allowed_decisions:
-        raise ValueError(f"forced_decision 僅允許 {allowed_decisions}，收到：{forced_decision}")
+        raise ValueError(
+            f"forced_decision 僅允許 {allowed_decisions}，收到：{forced_decision}")
 
     klines = get_latest_klines(
         client=client,
@@ -627,6 +767,34 @@ def force_simulated_trade_cycle(
         linked_order_id=None,
     )
 
+    create_system_event(
+        conn,
+        event_type="DECISION_RECORDED",
+        event_level="INFO",
+        source="MANUAL",
+        message=f"demo force decision 已寫入：{forced_decision}",
+        details={
+            "decision_id": decision_id,
+            "symbol": settings.primary_symbol,
+            "interval": settings.primary_interval,
+            "decision": forced_decision,
+            "bar_close_time": target_bar_close_time.isoformat(),
+            "position_id_before": system_state["current_position_id"],
+            "position_side_before": system_state["current_position_side"],
+        },
+        created_by="demo_force_trade_cycle",
+        engine_mode_before=system_state["engine_mode"],
+        engine_mode_after=system_state["engine_mode"],
+        trade_mode_before=system_state["trade_mode"],
+        trade_mode_after=system_state["trade_mode"],
+        trading_state_before=system_state["trading_state"],
+        trading_state_after=system_state["trading_state"],
+        live_armed_before=system_state["live_armed"],
+        live_armed_after=system_state["live_armed"],
+        strategy_version_before=system_state["active_strategy_version_id"],
+        strategy_version_after=system_state["active_strategy_version_id"],
+    )
+
     executed = False
     linked_order_id = None
     last_trade_id = None
@@ -644,6 +812,7 @@ def force_simulated_trade_cycle(
             active_strategy=active_strategy,
             latest_kline=latest_kline,
             decision_result={"decision": forced_decision},
+            decision_id=decision_id,
         )
         executed = True
 
@@ -657,6 +826,7 @@ def force_simulated_trade_cycle(
             system_state=system_state,
             active_strategy=active_strategy,
             latest_kline=latest_kline,
+            decision_id=decision_id,
         )
         executed = True
         position_id_after = None
