@@ -1,13 +1,13 @@
 ﻿"""
 Path: main.py
-說明：主程式入口，負責載入設定、初始化 logging、連線資料庫，讀取 system_state 與 ACTIVE 策略，並執行一次 runtime 流程。
+說明：主程式入口，負責載入設定、初始化 logging、連線資料庫，讀取 system_state 與 ACTIVE 策略，並啟動前景常駐 runtime loop。
 """
 
 from __future__ import annotations
 
 from config.logging import get_logger, setup_logging
 from config.settings import load_settings
-from core.runtime import run_runtime_once
+from core.runtime import run_runtime_loop
 from services.strategy_service import load_active_strategy
 from storage.db import connection_scope, test_connection
 from storage.repositories.system_state_repo import get_system_state
@@ -59,10 +59,10 @@ def main() -> None:
         logger.info("ACTIVE_SYMBOL=%s", active_strategy["symbol"])
         logger.info("ACTIVE_INTERVAL=%s", active_strategy["interval"])
 
-        run_runtime_once(
+        run_runtime_loop(
             conn,
             settings=settings,
-            active_strategy=active_strategy,
+            poll_interval_seconds=5,
         )
 
 

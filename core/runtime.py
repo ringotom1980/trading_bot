@@ -1,9 +1,11 @@
 """
 Path: core/runtime.py
-說明：即時執行流程骨架，負責讀取 system_state、更新 heartbeat，透過守門模組判斷是否可進交易流程，並在通過時寫入 decisions_log 與模擬進出場流程。
+說明：即時執行流程骨架，負責讀取 system_state、更新 heartbeat，透過守門模組判斷是否可進交易流程，並在通過時寫入 decisions_log 與執行流程。
 """
 
 from __future__ import annotations
+
+from time import sleep
 
 from psycopg2.extensions import connection as PgConnection
 
@@ -14,6 +16,7 @@ from core.heartbeat import touch_system_heartbeat
 from core.state_machine import summarize_state
 from exchange.binance_client import BinanceClient
 from services.execution_service import record_runtime_decision
+from services.strategy_service import load_active_strategy
 from storage.repositories.system_events_repo import create_system_event
 from storage.repositories.system_state_repo import get_system_state
 
@@ -102,3 +105,43 @@ def run_runtime_once(
         result["position_id_after"],
         result["position_side_after"],
     )
+
+
+def run_runtime_loop(
+    conn: PgConnection,
+    *,
+    settings: Settings,
+    poll_interval_seconds: int = 5,
+) -> None:
+    """
+    功能：以前景常駐模式持續執行 runtime。
+    說明：
+        - 每輪重新載入 ACTIVE 策略，避免後續升版後仍使用舊策略。
+        - 每輪呼叫 run_runtime_once()。
+        - 若單輪失敗，記錄 log 後不中斷整體迴圈。
+    參數：
+        conn: PostgreSQL 連線物件。
+        settings: 全域設定物件。
+        poll_interval_seconds: 輪詢秒數。
+    """
+    logger = get_logger("core.runtime")
+    logger.info("runtime loop 啟動，poll_interval_seconds=%s", poll_interval_seconds)
+
+    while True:
+        try:
+            active_strategy = load_active_strategy(conn)
+
+            run_runtime_once(
+                conn,
+                settings=settings,
+                active_strategy=active_strategy,
+            )
+
+        except KeyboardInterrupt:
+            logger.info("收到 KeyboardInterrupt，結束 runtime loop")
+            raise
+
+        except Exception as exc:
+            logger.exception("runtime loop 單輪執行失敗：%s", exc)
+
+        sleep(poll_interval_seconds)
