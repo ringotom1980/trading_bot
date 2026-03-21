@@ -6,25 +6,6 @@ Path: scripts/testnet_force_order.py
 """
 
 from __future__ import annotations
-from storage.repositories.trades_repo import get_latest_trade_log
-from storage.repositories.system_state_repo import get_system_state, update_runtime_refs
-from storage.repositories.positions_repo import get_open_position_by_symbol
-from storage.repositories.orders_repo import get_latest_order
-from storage.repositories.decisions_repo import (
-    get_decision_by_bar_close_time,
-    insert_decision_log,
-    mark_decision_executed,
-)
-from storage.db import connection_scope, test_connection
-from services.strategy_service import load_active_strategy
-from services.executors.live_executor import (
-    create_live_entry_flow,
-    create_live_exit_flow,
-)
-from exchange.market_data import get_latest_klines
-from exchange.binance_client import BinanceClient
-from config.settings import load_settings
-from config.logging import setup_logging
 
 import json
 import sys
@@ -36,6 +17,26 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from config.logging import setup_logging
+from config.settings import load_settings
+from exchange.binance_client import BinanceClient
+from exchange.market_data import get_latest_klines
+from services.executors.live_executor import (
+    create_live_entry_flow,
+    create_live_exit_flow,
+)
+from services.strategy_service import load_active_strategy
+from storage.db import connection_scope, test_connection
+from storage.repositories.decisions_repo import (
+    get_decision_by_bar_close_time,
+    insert_decision_log,
+    mark_decision_executed,
+)
+from storage.repositories.orders_repo import get_latest_order
+from storage.repositories.positions_repo import get_open_position_by_symbol
+from storage.repositories.system_state_repo import get_system_state, update_runtime_refs
+from storage.repositories.trades_repo import get_latest_trade_log
 
 
 def _json_default(value: Any) -> str:
