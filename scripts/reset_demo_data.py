@@ -19,37 +19,48 @@ from storage.repositories.system_state_repo import get_system_state
 
 
 ALLOWED_TRADING_STATES = {"ON", "ENTRY_FROZEN", "OFF"}
+ALLOWED_TRADE_MODES = {"TESTNET", "LIVE"}
 
 
-def parse_args() -> tuple[str, bool]:
+def parse_args() -> tuple[str, str, bool]:
     """
     功能：解析 CLI 參數。
     用法：
         python scripts/reset_demo_data.py
         python scripts/reset_demo_data.py ON
-        python scripts/reset_demo_data.py ENTRY_FROZEN
-        python scripts/reset_demo_data.py OFF true
+        python scripts/reset_demo_data.py ON LIVE
+        python scripts/reset_demo_data.py ON LIVE false
+        python scripts/reset_demo_data.py ENTRY_FROZEN TESTNET false
     回傳：
-        (trading_state, live_armed)
+        (trading_state, trade_mode, live_armed)
     """
     trading_state = "ON"
+    trade_mode = "TESTNET"
     live_armed = False
 
     if len(sys.argv) >= 2:
         trading_state = sys.argv[1].strip().upper()
 
     if len(sys.argv) >= 3:
-        live_armed = sys.argv[2].strip().lower() == "true"
+        trade_mode = sys.argv[2].strip().upper()
+
+    if len(sys.argv) >= 4:
+        live_armed = sys.argv[3].strip().lower() == "true"
 
     if trading_state not in ALLOWED_TRADING_STATES:
         raise SystemExit(
-            "用法：python scripts/reset_demo_data.py [ON|ENTRY_FROZEN|OFF] [true|false]"
+            "用法：python scripts/reset_demo_data.py [ON|ENTRY_FROZEN|OFF] [TESTNET|LIVE] [true|false]"
         )
 
-    return trading_state, live_armed
+    if trade_mode not in ALLOWED_TRADE_MODES:
+        raise SystemExit(
+            "用法：python scripts/reset_demo_data.py [ON|ENTRY_FROZEN|OFF] [TESTNET|LIVE] [true|false]"
+        )
+
+    return trading_state, trade_mode, live_armed
 
 
-def reset_demo_system_state(conn, *, trading_state: str, live_armed: bool) -> None:
+def reset_demo_system_state(conn, *, trading_state: str, trade_mode: str, live_armed: bool) -> None:
     """
     功能：將 system_state 重設為 demo 測試固定起始值。
     """
@@ -57,7 +68,7 @@ def reset_demo_system_state(conn, *, trading_state: str, live_armed: bool) -> No
     UPDATE system_state
     SET
         engine_mode = 'REALTIME',
-        trade_mode = 'TESTNET',
+        trade_mode = %s,
         trading_state = %s,
         live_armed = %s,
         current_position_side = NULL,
@@ -73,14 +84,14 @@ def reset_demo_system_state(conn, *, trading_state: str, live_armed: bool) -> No
     """
 
     with conn.cursor() as cursor:
-        cursor.execute(sql, (trading_state, live_armed))
+        cursor.execute(sql, (trade_mode, trading_state, live_armed))
 
 
 def main() -> None:
     """
     功能：執行 demo 起始狀態重設。
     """
-    trading_state, live_armed = parse_args()
+    trading_state, trade_mode, live_armed = parse_args()
 
     with connection_scope() as conn:
         state = get_system_state(conn, state_id=1)
@@ -90,6 +101,7 @@ def main() -> None:
         reset_demo_system_state(
             conn,
             trading_state=trading_state,
+            trade_mode=trade_mode,
             live_armed=live_armed,
         )
 
@@ -98,7 +110,7 @@ def main() -> None:
     print("==============================")
     print("system_state 已重設為 demo 起始狀態：")
     print("- engine_mode = REALTIME")
-    print("- trade_mode = TESTNET")
+    print(f"- trade_mode = {trade_mode}")
     print(f"- trading_state = {trading_state}")
     print(f"- live_armed = {str(live_armed).upper()}")
     print("- current_position_side = NULL")

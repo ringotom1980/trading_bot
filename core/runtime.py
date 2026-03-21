@@ -14,6 +14,7 @@ from core.heartbeat import touch_system_heartbeat
 from core.state_machine import summarize_state
 from exchange.binance_client import BinanceClient
 from services.execution_service import record_runtime_decision
+from storage.repositories.system_events_repo import create_system_event
 from storage.repositories.system_state_repo import get_system_state
 
 
@@ -44,6 +45,30 @@ def run_runtime_once(
 
     allowed, reason = evaluate_runtime_guard(system_state)
     if not allowed:
+        create_system_event(
+            conn,
+            event_type="GUARD_TRIGGERED",
+            event_level="INFO",
+            source="SYSTEM",
+            message=reason,
+            details={
+                "guard_type": "runtime_guard",
+                "symbol": settings.primary_symbol,
+                "interval": settings.primary_interval,
+                "state_summary": summarize_state(system_state),
+            },
+            created_by="run_runtime_once",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
         logger.info(reason)
         return
 
