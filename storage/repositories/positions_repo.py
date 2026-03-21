@@ -40,6 +40,8 @@ def get_open_position_by_symbol(conn: PgConnection, symbol: str) -> dict[str, An
         net_pnl,
         entry_order_id,
         exit_order_id,
+        entry_decision_id,
+        exit_decision_id,
         opened_at,
         closed_at,
         close_reason,
@@ -78,12 +80,14 @@ def get_open_position_by_symbol(conn: PgConnection, symbol: str) -> dict[str, An
         "net_pnl": float(row[15]) if row[15] is not None else None,
         "entry_order_id": row[16],
         "exit_order_id": row[17],
-        "opened_at": row[18],
-        "closed_at": row[19],
-        "close_reason": row[20],
-        "exchange_position_ref": row[21],
-        "created_at": row[22],
-        "updated_at": row[23],
+        "entry_decision_id": row[18],
+        "exit_decision_id": row[19],
+        "opened_at": row[20],
+        "closed_at": row[21],
+        "close_reason": row[22],
+        "exchange_position_ref": row[23],
+        "created_at": row[24],
+        "updated_at": row[25],
     }
 
 
@@ -96,6 +100,7 @@ def create_position(
     trade_mode: str | None,
     strategy_version_id: int,
     side: str,
+    entry_decision_id: int | None,
     entry_price: float,
     entry_qty: float,
     entry_notional: float | None,
@@ -115,6 +120,7 @@ def create_position(
         trade_mode,
         strategy_version_id,
         side,
+        entry_decision_id,
         status,
         entry_price,
         entry_qty,
@@ -139,6 +145,7 @@ def create_position(
                 trade_mode,
                 strategy_version_id,
                 side,
+                entry_decision_id,
                 entry_price,
                 entry_qty,
                 entry_notional,
@@ -256,3 +263,27 @@ def update_position_exit_order_id(
 
     with conn.cursor() as cursor:
         cursor.execute(sql, (exit_order_id, position_id))
+
+def update_position_exit_decision_id(
+    conn: PgConnection,
+    *,
+    position_id: int,
+    exit_decision_id: int,
+) -> None:
+    """
+    功能：更新持倉的 exit_decision_id。
+    參數：
+        conn: PostgreSQL 連線物件。
+        position_id: 持倉主鍵。
+        exit_decision_id: 平倉決策主鍵。
+    """
+    sql = """
+    UPDATE positions
+    SET
+        exit_decision_id = %s,
+        updated_at = NOW()
+    WHERE position_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (exit_decision_id, position_id))

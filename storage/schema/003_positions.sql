@@ -21,7 +21,9 @@ CREATE TABLE IF NOT EXISTS positions (
     fees NUMERIC(20, 8) NOT NULL DEFAULT 0,
     net_pnl NUMERIC(20, 8) NULL,
     entry_order_id BIGINT NULL,
+    entry_decision_id BIGINT NULL,
     exit_order_id BIGINT NULL,
+    exit_decision_id BIGINT NULL,
     opened_at TIMESTAMPTZ NOT NULL,
     closed_at TIMESTAMPTZ NULL,
     close_reason VARCHAR(32) NULL,
@@ -57,7 +59,17 @@ CREATE TABLE IF NOT EXISTS positions (
     CONSTRAINT fk_positions_strategy_version
         FOREIGN KEY (strategy_version_id)
         REFERENCES strategy_versions (strategy_version_id)
-        ON DELETE RESTRICT
+        ON DELETE RESTRICT,
+
+    CONSTRAINT fk_positions_entry_decision
+        FOREIGN KEY (entry_decision_id)
+        REFERENCES decisions_log (decision_id)
+        ON DELETE SET NULL,
+
+    CONSTRAINT fk_positions_exit_decision
+        FOREIGN KEY (exit_decision_id)
+        REFERENCES decisions_log (decision_id)
+        ON DELETE SET NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_positions_strategy_version_id

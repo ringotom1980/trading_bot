@@ -24,6 +24,7 @@ from storage.repositories.positions_repo import (
     create_position,
     get_open_position_by_symbol,
     update_position_entry_order_id,
+    update_position_exit_decision_id,
     update_position_exit_order_id,
 )
 from storage.repositories.system_events_repo import create_system_event
@@ -54,8 +55,8 @@ def _calculate_bars_held(entry_time: datetime, exit_time: datetime) -> int:
     規則：
         floor((exit_time - entry_time) / 15m)
     """
-    seconds = (exit_time - entry_time).total_seconds()
-    bars_held = int(seconds // (15 * 60))
+    seconds= (exit_time - entry_time).total_seconds()
+    bars_held= int(seconds // (15 * 60))
     return max(bars_held, 0)
 
 
@@ -73,14 +74,14 @@ def _get_demo_safe_bar_times(
     回傳：
         (bar_open_time, bar_close_time)
     """
-    base_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
-    base_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
+    base_open_time= _ms_to_datetime(int(latest_kline["open_time"]))
+    base_close_time= _ms_to_datetime(int(latest_kline["close_time"]))
 
-    existing_decision = get_decision_by_bar_close_time(
+    existing_decision= get_decision_by_bar_close_time(
         conn,
-        symbol=symbol,
-        interval=interval,
-        bar_close_time=base_close_time,
+        symbol = symbol,
+        interval = interval,
+        bar_close_time = base_close_time,
     )
 
     if existing_decision is None:
@@ -233,6 +234,7 @@ def _create_simulated_entry_flow(
         trade_mode=system_state["trade_mode"],
         strategy_version_id=int(active_strategy["strategy_version_id"]),
         side=position_side,
+        entry_decision_id=decision_id,
         entry_price=avg_price,
         entry_qty=qty,
         entry_notional=entry_notional,
@@ -396,6 +398,12 @@ def _create_simulated_exit_flow(
         exit_order_id=exit_order_id,
     )
 
+    update_position_exit_decision_id(
+        conn,
+        position_id=int(open_position["position_id"]),
+        exit_decision_id=decision_id,
+    )
+
     close_position(
         conn,
         position_id=int(open_position["position_id"]),
@@ -427,7 +435,7 @@ def _create_simulated_exit_flow(
         net_pnl=net_pnl,
         bars_held=bars_held,
         close_reason="SIGNAL_EXIT",
-        entry_decision_id=None,
+        entry_decision_id=open_position["entry_decision_id"],
         exit_decision_id=decision_id,
         entry_order_id=open_position["entry_order_id"],
         exit_order_id=exit_order_id,
