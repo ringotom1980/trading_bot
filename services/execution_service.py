@@ -11,6 +11,7 @@ from typing import Any
 from psycopg2.extensions import connection as PgConnection
 
 from config.settings import Settings
+from config.logging import get_logger
 from core.guards import (
     evaluate_cooldown_guard,
     evaluate_entry_guard,
@@ -217,6 +218,8 @@ def record_runtime_decision(
     """
     功能：由 runtime 整合市場資料、特徵、訊號與決策，寫入 decisions_log，並在 ENTER / EXIT 決策時建立執行流程。
     """
+    logger = get_logger("services.execution_service")
+
     context = build_decision_context(
         settings=settings,
         client=client,
@@ -225,7 +228,25 @@ def record_runtime_decision(
 
     latest_kline = context["klines"][-1]
     feature_pack = context["feature_pack"]
+    signal_scores = context["signal_scores"]
     decision_result = context["decision_result"]
+
+    params = active_strategy["params_json"]
+    entry_threshold = float(params.get("entry_threshold", 0.0))
+    exit_threshold = float(params.get("exit_threshold", 0.0))
+    reverse_threshold = float(params.get("reverse_threshold", 0.0))
+    reverse_gap = float(params.get("reverse_gap", 0.0))
+
+    logger.info(
+        "策略分數：long_score=%.6f, short_score=%.6f, entry_threshold=%.6f, exit_threshold=%.6f, reverse_threshold=%.6f, reverse_gap=%.6f, decision=%s",
+        float(signal_scores["long_score"]),
+        float(signal_scores["short_score"]),
+        entry_threshold,
+        exit_threshold,
+        reverse_threshold,
+        reverse_gap,
+        decision_result["decision"],
+    )
 
     target_bar_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
     target_bar_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
@@ -372,7 +393,8 @@ def record_runtime_decision(
                 guard_reason = cooldown_reason
 
     elif decision_result["decision"] == "EXIT":
-        open_position = get_open_position_by_symbol(conn, settings.primary_symbol)
+        open_position = get_open_position_by_symbol(
+            conn, settings.primary_symbol)
 
         allow_exit, guard_reason = evaluate_exit_guard(
             system_state,
