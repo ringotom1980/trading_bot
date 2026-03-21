@@ -6,6 +6,25 @@ Path: scripts/testnet_force_order.py
 """
 
 from __future__ import annotations
+from storage.repositories.trades_repo import get_latest_trade_log
+from storage.repositories.system_state_repo import get_system_state, update_runtime_refs
+from storage.repositories.positions_repo import get_open_position_by_symbol
+from storage.repositories.orders_repo import get_latest_order
+from storage.repositories.decisions_repo import (
+    get_decision_by_bar_close_time,
+    insert_decision_log,
+    mark_decision_executed,
+)
+from storage.db import connection_scope, test_connection
+from services.strategy_service import load_active_strategy
+from services.executors.live_executor import (
+    create_live_entry_flow,
+    create_live_exit_flow,
+)
+from exchange.market_data import get_latest_klines
+from exchange.binance_client import BinanceClient
+from config.settings import load_settings
+from config.logging import setup_logging
 
 import json
 import sys
@@ -17,22 +36,6 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
-
-from config.logging import setup_logging
-from config.settings import load_settings
-from exchange.binance_client import BinanceClient
-from exchange.market_data import get_latest_klines
-from services.executors.live_executor import (
-    create_live_entry_flow,
-    create_live_exit_flow,
-)
-from services.strategy_service import load_active_strategy
-from storage.db import connection_scope, test_connection
-from storage.repositories.decisions_repo import insert_decision_log, mark_decision_executed
-from storage.repositories.orders_repo import get_latest_order
-from storage.repositories.positions_repo import get_open_position_by_symbol
-from storage.repositories.system_state_repo import get_system_state, update_runtime_refs
-from storage.repositories.trades_repo import get_latest_trade_log
 
 
 def _json_default(value: Any) -> str:
@@ -51,11 +54,44 @@ def _print_section(title: str, data: dict[str, Any] | None) -> None:
     print(json.dumps(data, ensure_ascii=False, indent=2, default=_json_default))
 
 
+def _get_safe_bar_times(
+    conn,
+    *,
+    symbol: str,
+    interval: str,
+    latest_kline: dict[str, Any],
+) -> tuple[datetime, datetime]:
+    """
+    功能：避免 testnet_force_order 寫入重複的 bar_close_time。
+    若同一根 bar 已有 decision，則自動加 1 微秒避開唯一鍵。
+    """
+    base_open_time = datetime.fromtimestamp(
+        int(latest_kline["open_time"]) / 1000)
+    base_close_time = datetime.fromtimestamp(
+        int(latest_kline["close_time"]) / 1000)
+
+    existing = get_decision_by_bar_close_time(
+        conn,
+        symbol=symbol,
+        interval=interval,
+        bar_close_time=base_close_time,
+    )
+
+    if existing is None:
+        return base_open_time, base_close_time
+
+    return (
+        base_open_time.replace(microsecond=base_open_time.microsecond + 1),
+        base_close_time.replace(microsecond=base_close_time.microsecond + 1),
+    )
+
+
 def main() -> None:
     setup_logging()
 
     if len(sys.argv) != 2:
-        raise SystemExit("用法：python scripts/testnet_force_order.py ENTER_LONG|ENTER_SHORT|EXIT")
+        raise SystemExit(
+            "用法：python scripts/testnet_force_order.py ENTER_LONG|ENTER_SHORT|EXIT")
 
     forced_decision = sys.argv[1].strip().upper()
     allowed = {"ENTER_LONG", "ENTER_SHORT", "EXIT"}
@@ -81,13 +117,16 @@ def main() -> None:
             raise RuntimeError("找不到 system_state(id=1)")
 
         if str(system_state_before["trade_mode"]) != "TESTNET":
-            raise RuntimeError("目前 system_state.trade_mode 不是 TESTNET，不能執行 testnet_force_order")
+            raise RuntimeError(
+                "目前 system_state.trade_mode 不是 TESTNET，不能執行 testnet_force_order")
 
         if str(system_state_before["engine_mode"]) != "REALTIME":
-            raise RuntimeError("目前 system_state.engine_mode 不是 REALTIME，不能執行 testnet_force_order")
+            raise RuntimeError(
+                "目前 system_state.engine_mode 不是 REALTIME，不能執行 testnet_force_order")
 
         if str(system_state_before["trading_state"]) != "ON":
-            raise RuntimeError("目前 system_state.trading_state 不是 ON，請先 reset_demo_data.py ON TESTNET false")
+            raise RuntimeError(
+                "目前 system_state.trading_state 不是 ON，請先 reset_demo_data.py ON TESTNET false")
 
         active_strategy = load_active_strategy(conn)
         klines = get_latest_klines(
@@ -98,8 +137,12 @@ def main() -> None:
         )
         latest_kline = klines[-1]
 
-        target_bar_open_time = datetime.fromtimestamp(int(latest_kline["open_time"]) / 1000)
-        target_bar_close_time = datetime.fromtimestamp(int(latest_kline["close_time"]) / 1000)
+        target_bar_open_time, target_bar_close_time = _get_safe_bar_times(
+            conn,
+            symbol=settings.primary_symbol,
+            interval=settings.primary_interval,
+            latest_kline=latest_kline,
+        )
 
         decision_id = insert_decision_log(
             conn,
@@ -182,7 +225,8 @@ def main() -> None:
         )
 
         system_state_after = get_system_state(conn, 1)
-        open_position = get_open_position_by_symbol(conn, settings.primary_symbol)
+        open_position = get_open_position_by_symbol(
+            conn, settings.primary_symbol)
         latest_order = get_latest_order(conn)
         latest_trade = get_latest_trade_log(conn)
 
