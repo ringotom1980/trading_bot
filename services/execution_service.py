@@ -11,7 +11,11 @@ from typing import Any
 from psycopg2.extensions import connection as PgConnection
 
 from config.settings import Settings
-from core.guards import evaluate_entry_guard, evaluate_exit_guard
+from core.guards import (
+    evaluate_cooldown_guard,
+    evaluate_entry_guard,
+    evaluate_exit_guard,
+)
 from exchange.binance_client import BinanceClient
 from exchange.market_data import get_latest_klines
 from storage.repositories.decisions_repo import (
@@ -33,7 +37,10 @@ from storage.repositories.system_state_repo import (
     update_current_position,
     update_runtime_refs,
 )
-from storage.repositories.trades_repo import create_trade_log
+from storage.repositories.trades_repo import (
+    create_trade_log,
+    get_latest_closed_trade_by_symbol,
+)
 from strategy.decision import calculate_decision
 from strategy.features import calculate_feature_pack
 from strategy.signals import calculate_signal_scores
@@ -652,21 +659,34 @@ def record_runtime_decision(
     position_side_after = system_state["current_position_side"]
     guard_reason = None
     min_hold_bars = int(active_strategy["params_json"].get("min_hold_bars", 0))
+    cooldown_bars = int(active_strategy["params_json"].get("cooldown_bars", 0))
 
     if decision_result["decision"] in {"ENTER_LONG", "ENTER_SHORT"}:
         allow_entry, guard_reason = evaluate_entry_guard(system_state)
 
         if allow_entry:
-            linked_order_id, position_id_after, position_side_after = _create_simulated_entry_flow(
-                conn,
-                settings=settings,
-                system_state=system_state,
-                active_strategy=active_strategy,
-                latest_kline=latest_kline,
-                decision_result=decision_result,
-                decision_id=decision_id,
+            latest_closed_trade = get_latest_closed_trade_by_symbol(
+                conn, settings.primary_symbol)
+            allow_cooldown, cooldown_reason = evaluate_cooldown_guard(
+                latest_closed_trade=latest_closed_trade,
+                current_bar_close_time=target_bar_close_time,
+                cooldown_bars=cooldown_bars,
+                bar_minutes=15,
             )
-            executed = True
+
+            if allow_cooldown:
+                linked_order_id, position_id_after, position_side_after = _create_simulated_entry_flow(
+                    conn,
+                    settings=settings,
+                    system_state=system_state,
+                    active_strategy=active_strategy,
+                    latest_kline=latest_kline,
+                    decision_result=decision_result,
+                    decision_id=decision_id,
+                )
+                executed = True
+            else:
+                guard_reason = cooldown_reason
 
     elif decision_result["decision"] == "EXIT":
         open_position = get_open_position_by_symbol(

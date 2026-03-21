@@ -18,7 +18,6 @@ from core.state_machine import (
     is_trading_on,
 )
 
-
 def evaluate_runtime_guard(system_state: dict[str, Any]) -> tuple[bool, str]:
     """
     功能：判斷 runtime 是否允許進入即時交易流程。
@@ -75,6 +74,32 @@ def evaluate_entry_guard(system_state: dict[str, Any]) -> tuple[bool, str]:
 
     return True, "允許新倉"
 
+def evaluate_cooldown_guard(
+    *,
+    latest_closed_trade: dict[str, Any] | None,
+    current_bar_close_time,
+    cooldown_bars: int,
+    bar_minutes: int = 15,
+) -> tuple[bool, str]:
+    """
+    功能：判斷目前是否仍在冷卻期內。
+    回傳：
+        (是否允許進場, 原因說明)
+    """
+    if latest_closed_trade is None:
+        return True, "無最近平倉紀錄，不受 cooldown 限制"
+
+    if cooldown_bars <= 0:
+        return True, "cooldown_bars=0，不受 cooldown 限制"
+
+    last_exit_time = latest_closed_trade["exit_time"]
+    seconds = (current_bar_close_time - last_exit_time).total_seconds()
+    cooled_bars = int(seconds // (bar_minutes * 60))
+
+    if cooled_bars < cooldown_bars:
+        return False, f"尚在 cooldown_bars={cooldown_bars} 冷卻期內，目前僅過 {cooled_bars} 根"
+
+    return True, "已通過 cooldown 限制"
 
 def evaluate_exit_guard(
     system_state: dict[str, Any],
@@ -99,6 +124,9 @@ def evaluate_exit_guard(
     if open_position is None:
         return False, "目前沒有 OPEN 持倉，無需平倉"
 
+    if is_trading_off(system_state):
+        return False, "trading_state=OFF，禁止平倉"
+
     held_bars = calculate_held_bars(
         opened_at=open_position["opened_at"],
         current_bar_close_time=current_bar_close_time,
@@ -110,8 +138,5 @@ def evaluate_exit_guard(
 
     if is_live_mode(system_state) and not is_live_armed(system_state):
         return False, "trade_mode=LIVE 但未武裝，禁止平倉流程"
-
-    if is_trading_off(system_state):
-        return False, "trading_state=OFF，禁止平倉"
 
     return True, "允許平倉"
