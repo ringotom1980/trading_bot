@@ -1,6 +1,7 @@
 """
 Path: evolver/generator.py
-說明：Candidate Generator v6，加入 candidate 去重 / 指紋化，減少等價候選與無效 mutation。
+說明：Candidate Generator v7，擴充 hold / risk / entry-reverse / 非對稱 weights 候選族群，
+並保留 candidate 去重 / 指紋化，降低同質候選。
 """
 
 from __future__ import annotations
@@ -13,18 +14,18 @@ from strategy.signals import DEFAULT_WEIGHTS
 
 
 THRESHOLD_FIELD_SPECS: dict[str, tuple[list[float], int]] = {
-    "entry_threshold": ([-0.05, 0.05], 4),
-    "exit_threshold": ([-0.05, 0.05], 4),
-    "reverse_threshold": ([-0.05, 0.05], 4),
-    "reverse_gap": ([-0.02, 0.02], 4),
-    "hard_stop_loss_pct": ([-0.005, 0.005], 4),
-    "take_profit_pct": ([-0.01, 0.01], 4),
+    "entry_threshold": ([-0.08, -0.05, 0.05, 0.08], 4),
+    "exit_threshold": ([-0.08, -0.05, 0.05, 0.08], 4),
+    "reverse_threshold": ([-0.08, -0.05, 0.05, 0.08], 4),
+    "reverse_gap": ([-0.04, -0.02, 0.02, 0.04], 4),
+    "hard_stop_loss_pct": ([-0.008, -0.005, 0.005, 0.008], 4),
+    "take_profit_pct": ([-0.015, -0.01, 0.01, 0.015], 4),
 }
 
 INT_FIELD_SPECS: dict[str, list[int]] = {
-    "cooldown_bars": [-1, 1],
-    "min_hold_bars": [-1, 1],
-    "max_bars_hold": [-12, 12],
+    "cooldown_bars": [-2, -1, 1, 2],
+    "min_hold_bars": [-2, -1, 1, 2, 4],
+    "max_bars_hold": [-18, -12, 12, 18, 24],
 }
 
 WEIGHT_MUTATION_TEMPLATES: list[dict[str, Any]] = [
@@ -164,6 +165,118 @@ WEIGHT_MUTATION_TEMPLATES: list[dict[str, Any]] = [
             "volume_ratio_20": -0.12,
         },
     },
+    {
+        "name": "long_aggressive_short_defensive",
+        "long": {
+            "close_vs_sma20_pct": -0.12,
+            "close_vs_sma60_pct": -0.12,
+            "slope_5": 0.18,
+            "slope_10": 0.18,
+            "volume_ratio_20": -0.12,
+        },
+        "short": {
+            "close_vs_sma20_pct": 0.08,
+            "close_vs_sma60_pct": 0.08,
+            "slope_5": -0.04,
+            "slope_10": -0.04,
+            "volume_ratio_20": -0.08,
+        },
+    },
+    {
+        "name": "long_defensive_short_aggressive",
+        "long": {
+            "close_vs_sma20_pct": 0.08,
+            "close_vs_sma60_pct": 0.08,
+            "slope_5": -0.04,
+            "slope_10": -0.04,
+            "volume_ratio_20": -0.08,
+        },
+        "short": {
+            "close_vs_sma20_pct": -0.12,
+            "close_vs_sma60_pct": -0.12,
+            "slope_5": 0.18,
+            "slope_10": 0.18,
+            "volume_ratio_20": -0.12,
+        },
+    },
+    {
+        "name": "volume_momentum_combo",
+        "long": {
+            "close_vs_sma20_pct": -0.06,
+            "close_vs_sma60_pct": -0.06,
+            "slope_5": 0.10,
+            "slope_10": 0.10,
+            "volume_ratio_20": 0.14,
+        },
+        "short": {
+            "close_vs_sma20_pct": -0.06,
+            "close_vs_sma60_pct": -0.06,
+            "slope_5": 0.10,
+            "slope_10": 0.10,
+            "volume_ratio_20": 0.14,
+        },
+    },
+]
+
+PROFILE_TEMPLATES: list[dict[str, Any]] = [
+    {
+        "name": "hold_short",
+        "overrides": {
+            "min_hold_bars": 1,
+            "max_bars_hold": 12,
+        },
+    },
+    {
+        "name": "hold_medium",
+        "overrides": {
+            "min_hold_bars": 2,
+            "max_bars_hold": 24,
+        },
+    },
+    {
+        "name": "hold_long",
+        "overrides": {
+            "min_hold_bars": 4,
+            "max_bars_hold": 36,
+        },
+    },
+    {
+        "name": "risk_tight",
+        "overrides": {
+            "hard_stop_loss_pct": 0.012,
+            "take_profit_pct": 0.025,
+        },
+    },
+    {
+        "name": "risk_balanced",
+        "overrides": {
+            "hard_stop_loss_pct": 0.015,
+            "take_profit_pct": 0.03,
+        },
+    },
+    {
+        "name": "risk_wide",
+        "overrides": {
+            "hard_stop_loss_pct": 0.025,
+            "take_profit_pct": 0.05,
+        },
+    },
+    {
+        "name": "entry_loose",
+        "overrides": {
+            "entry_threshold": 0.48,
+            "reverse_threshold": 0.62,
+            "reverse_gap": 0.08,
+        },
+    },
+    {
+        "name": "entry_tight",
+        "overrides": {
+            "entry_threshold": 0.60,
+            "reverse_threshold": 0.72,
+            "reverse_gap": 0.14,
+        },
+    },
 ]
 
 
@@ -185,6 +298,18 @@ def _copy_params(base_params: dict[str, Any]) -> dict[str, Any]:
 
 def _apply_safe_defaults(params: dict[str, Any]) -> dict[str, Any]:
     normalized = _copy_params(params)
+
+    if float(normalized.get("entry_threshold", 0.0)) <= 0:
+        normalized["entry_threshold"] = 0.55
+
+    if float(normalized.get("exit_threshold", 0.0)) <= 0:
+        normalized["exit_threshold"] = 0.35
+
+    if float(normalized.get("reverse_threshold", 0.0)) <= 0:
+        normalized["reverse_threshold"] = 0.65
+
+    if float(normalized.get("reverse_gap", 0.0)) <= 0:
+        normalized["reverse_gap"] = 0.10
 
     if float(normalized.get("hard_stop_loss_pct", 0.0)) <= 0:
         normalized["hard_stop_loss_pct"] = 0.015
@@ -237,13 +362,6 @@ def _normalize_weight_map(weight_map: dict[str, float]) -> dict[str, float]:
 
 
 def _canonicalize_params(params: dict[str, Any]) -> dict[str, Any]:
-    """
-    功能：將 candidate 轉成穩定可比對的 canonical form。
-    說明：
-        - mutation_tag 不納入 fingerprint
-        - 浮點數做固定 round
-        - weights 做正規化後再 round
-    """
     canonical = _copy_params(params)
     canonical.pop("mutation_tag", None)
 
@@ -331,6 +449,15 @@ def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any
             params = _copy_params(base_params)
             new_value = _round_float(base_value + delta, digits)
 
+            if field in {"entry_threshold", "exit_threshold", "reverse_threshold"}:
+                new_value = _clamp_float(new_value, 0.30, 0.90)
+            elif field == "reverse_gap":
+                new_value = _clamp_float(new_value, 0.04, 0.25)
+            elif field == "hard_stop_loss_pct":
+                new_value = _clamp_float(new_value, 0.008, 0.04)
+            elif field == "take_profit_pct":
+                new_value = _clamp_float(new_value, 0.015, 0.08)
+
             if _round_float(new_value, 6) == _round_float(base_value, 6):
                 continue
 
@@ -348,7 +475,7 @@ def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any
             elif field == "min_hold_bars":
                 new_value = _clamp_int(base_value + delta, 1, 48)
             else:
-                new_value = _clamp_int(base_value + delta, 2, 240)
+                new_value = _clamp_int(base_value + delta, 4, 240)
 
             if new_value == base_value:
                 continue
@@ -356,6 +483,22 @@ def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any
             params[field] = new_value
             params["mutation_tag"] = f"{field}:{delta:+}"
             variants.append(params)
+
+    return variants
+
+
+def _build_profile_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
+    base_params = _apply_safe_defaults(base_params)
+    variants: list[dict[str, Any]] = []
+
+    for template in PROFILE_TEMPLATES:
+        params = _copy_params(base_params)
+
+        for key, value in template.get("overrides", {}).items():
+            params[key] = value
+
+        params["mutation_tag"] = template["name"]
+        variants.append(params)
 
     return variants
 
@@ -430,36 +573,44 @@ def generate_param_candidates(
     base_params: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """
-    功能：根據 base strategy 產生第六版候選參數組合。
+    功能：根據 base strategy 產生第七版候選參數組合。
     說明：
-        - 保留 threshold 類微調
-        - 新增 weights.long / weights.short 演化
-        - 移除 +0.0 類無效 mutation
-        - 加入 fingerprint 去重
+        - 擴充 hold / risk / entry-reverse profile
+        - 擴充非對稱 weight families
+        - 保留 threshold / int 微調
+        - 保留 fingerprint 去重
     """
     normalized_base = _apply_safe_defaults(base_params)
     normalized_base["weights"] = _build_weight_variants(normalized_base)[0]["weights"]
 
     weight_variants = _build_weight_variants(normalized_base)
     threshold_variants = _build_threshold_variants(normalized_base)
+    profile_variants = _build_profile_variants(normalized_base)
 
     candidates: list[dict[str, Any]] = []
     candidates.append(normalized_base)
 
-    # 純權重變化
+    # 純 weights
     for params in weight_variants[1:]:
         candidates.append(params)
 
-    # 純 threshold 變化
+    # 純 threshold/int
     for params in threshold_variants:
         if "weights" not in params:
             params["weights"] = deepcopy(normalized_base["weights"])
         candidates.append(params)
 
-    # 少量 threshold + weight 組合
-    selected_threshold_variants = threshold_variants[:12]
-    selected_weight_variants = weight_variants[1:7]
+    # 純 profile
+    for params in profile_variants:
+        if "weights" not in params:
+            params["weights"] = deepcopy(normalized_base["weights"])
+        candidates.append(params)
 
+    selected_threshold_variants = threshold_variants[:16]
+    selected_weight_variants = weight_variants[1:9]
+    selected_profile_variants = profile_variants[:6]
+
+    # threshold + weight
     for threshold_params in selected_threshold_variants:
         for weight_params in selected_weight_variants:
             merged = _copy_params(threshold_params)
@@ -468,7 +619,32 @@ def generate_param_candidates(
             threshold_tag = threshold_params.get("mutation_tag", "threshold")
             weight_tag = weight_params.get("mutation_tag", "weight")
             merged["mutation_tag"] = f"{threshold_tag}+{weight_tag}"
+            candidates.append(merged)
 
+    # profile + weight
+    for profile_params in selected_profile_variants:
+        for weight_params in selected_weight_variants:
+            merged = _copy_params(profile_params)
+            merged["weights"] = deepcopy(weight_params["weights"])
+
+            profile_tag = profile_params.get("mutation_tag", "profile")
+            weight_tag = weight_params.get("mutation_tag", "weight")
+            merged["mutation_tag"] = f"{profile_tag}+{weight_tag}"
+            candidates.append(merged)
+
+    # profile + threshold
+    for profile_params in selected_profile_variants[:4]:
+        for threshold_params in selected_threshold_variants[:8]:
+            merged = _copy_params(profile_params)
+            for key, value in threshold_params.items():
+                if key in {"weights", "mutation_tag"}:
+                    continue
+                merged[key] = value
+
+            merged["weights"] = deepcopy(normalized_base["weights"])
+            profile_tag = profile_params.get("mutation_tag", "profile")
+            threshold_tag = threshold_params.get("mutation_tag", "threshold")
+            merged["mutation_tag"] = f"{profile_tag}+{threshold_tag}"
             candidates.append(merged)
 
     valid_candidates = [params for params in candidates if _is_valid_candidate(params)]
