@@ -158,3 +158,63 @@ def get_top_strategy_candidates(
         rows = cursor.fetchall()
 
     return [_row_to_strategy_candidate(row) for row in rows]
+
+
+def update_strategy_candidate_status(
+    conn: PgConnection,
+    *,
+    candidate_id: int,
+    candidate_status: str,
+    note: str | None = None,
+) -> None:
+    """
+    功能：更新 candidate 狀態。
+    """
+    sql = """
+    UPDATE strategy_candidates
+    SET
+        candidate_status = %s,
+        note = %s
+    WHERE candidate_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (candidate_status, note, candidate_id))
+        
+        
+def get_strategy_candidate_by_id(
+    conn: PgConnection,
+    *,
+    candidate_id: int,
+) -> dict[str, Any] | None:
+    """
+    功能：依 candidate_id 查詢單筆 candidate。
+    """
+    sql = """
+    SELECT
+        candidate_id,
+        source_strategy_version_id,
+        symbol,
+        interval,
+        tested_range_start,
+        tested_range_end,
+        candidate_no,
+        params_json,
+        metrics_json,
+        rank_score,
+        candidate_status,
+        note,
+        created_at
+    FROM strategy_candidates
+    WHERE candidate_id = %s
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (candidate_id,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return _row_to_strategy_candidate(row)

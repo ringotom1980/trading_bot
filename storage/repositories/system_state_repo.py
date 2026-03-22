@@ -212,3 +212,28 @@ def update_runtime_refs(
                 state_id,
             ),
         )
+        
+def update_active_strategy_version(
+    conn: PgConnection,
+    *,
+    state_id: int,
+    active_strategy_version_id: int,
+    updated_by: str,
+) -> None:
+    """
+    功能：更新 system_state.active_strategy_version_id。
+    """
+    sql = """
+    UPDATE system_state
+    SET
+        active_strategy_version_id = %s,
+        updated_at = NOW(),
+        updated_by = %s
+    WHERE id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (active_strategy_version_id, updated_by, state_id),
+        )

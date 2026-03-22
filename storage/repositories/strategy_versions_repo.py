@@ -234,3 +234,84 @@ def create_strategy_version(
         raise RuntimeError("建立 strategy_versions 失敗：未取得 strategy_version_id")
 
     return int(row[0])
+
+
+def retire_active_strategy(conn: PgConnection, *, retired_note: str | None = None) -> None:
+    """
+    功能：將目前 ACTIVE strategy 改為 RETIRED。
+    """
+    sql = """
+    UPDATE strategy_versions
+    SET
+        status = 'RETIRED',
+        retired_at = NOW(),
+        note = COALESCE(%s, note)
+    WHERE status = 'ACTIVE'
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (retired_note,))
+        
+        
+def create_evolved_strategy_version(
+    conn: PgConnection,
+    *,
+    base_version_id: int,
+    version_code: str,
+    symbol: str,
+    interval: str,
+    feature_set: dict[str, Any],
+    params: dict[str, Any],
+    backtest_summary: dict[str, Any] | None,
+    validation_summary: dict[str, Any] | None,
+    promotion_score: float | None,
+    note: str | None = None,
+) -> int:
+    """
+    功能：建立一筆 EVOLVED ACTIVE strategy version。
+    """
+    sql = """
+    INSERT INTO strategy_versions (
+        version_code,
+        status,
+        source_type,
+        base_version_id,
+        symbol,
+        interval,
+        feature_set_json,
+        params_json,
+        backtest_summary_json,
+        validation_summary_json,
+        promotion_score,
+        is_candidate,
+        activated_at,
+        note
+    )
+    VALUES (
+        %s, 'ACTIVE', 'EVOLVED', %s, %s, %s, %s::jsonb, %s::jsonb, %s::jsonb, %s::jsonb, %s, FALSE, NOW(), %s
+    )
+    RETURNING strategy_version_id
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                version_code,
+                base_version_id,
+                symbol,
+                interval,
+                json.dumps(feature_set, ensure_ascii=False),
+                json.dumps(params, ensure_ascii=False),
+                json.dumps(backtest_summary or {}, ensure_ascii=False),
+                json.dumps(validation_summary or {}, ensure_ascii=False),
+                promotion_score,
+                note,
+            ),
+        )
+        row = cursor.fetchone()
+
+    if row is None:
+        raise RuntimeError("建立 EVOLVED strategy_version 失敗：未取得 strategy_version_id")
+
+    return int(row[0])
