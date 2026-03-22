@@ -32,6 +32,16 @@ def _calc_pnl(
     raise ValueError(f"不支援的 side：{side}")
 
 
+def _to_bar_close_time_value(value: Any) -> int:
+    """
+    功能：將 close_time 統一轉為毫秒時間戳整數。
+    """
+    if isinstance(value, datetime):
+        return int(value.timestamp() * 1000)
+
+    return int(value)
+
+
 def run_backtest_replay(
     *,
     klines: list[dict[str, Any]],
@@ -83,7 +93,7 @@ def run_backtest_replay(
 
         decisions.append(
             {
-                "bar_close_time": int(latest["close_time"]),
+                "bar_close_time": _to_bar_close_time_value(latest["close_time"]),
                 "decision": decision_result["decision"],
                 "long_score": float(signal_scores["long_score"]),
                 "short_score": float(signal_scores["short_score"]),
