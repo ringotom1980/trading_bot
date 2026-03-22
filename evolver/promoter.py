@@ -1,6 +1,6 @@
 """
 Path: evolver/promoter.py
-說明：自動升版判斷模組，負責依 candidate metrics 與 active metrics 檢查是否通過 promotion gate v2。
+說明：自動升版判斷模組，負責依 candidate metrics 與 active metrics 檢查是否通過 promotion gate v3。
 """
 
 from __future__ import annotations
@@ -35,10 +35,23 @@ def check_promotion_gate(
     candidate_rank_score: float | None = None,
 ) -> tuple[bool, list[str]]:
     """
-    功能：檢查 candidate 是否通過 promotion gate v2。
+    功能：檢查 candidate 是否通過 promotion gate v3。
+
     規則：
         1. 先檢查 candidate 自身最低門檻
-        2. 若有 active_metrics，再檢查是否真的優於 ACTIVE
+        2. 若有 active_metrics，再走兩條升版路徑擇一：
+           A. 成長型升版：
+              - net_pnl >= active_net_pnl + min_net_pnl_improvement
+              - profit_factor >= active_profit_factor + min_profit_factor_improvement
+              - max_drawdown <= active_max_drawdown + max_drawdown_relaxation
+
+           B. 品質型升版：
+              - net_pnl >= active_net_pnl
+              - profit_factor >= active_profit_factor + min_profit_factor_improvement
+              - max_drawdown <= active_max_drawdown
+
+        3. 只要 A 或 B 任一成立，即視為通過相對 ACTIVE 檢查
+
     回傳：
         (是否通過, 原因列表)
     """
@@ -53,6 +66,7 @@ def check_promotion_gate(
     max_drawdown = _to_float(candidate_metrics, "max_drawdown")
     total_trades = _to_int(candidate_metrics, "total_trades")
 
+    # 基本門檻
     if net_pnl <= float(gate_cfg["min_net_pnl"]):
         reasons.append(
             f"net_pnl 未達標：{net_pnl:.8f} <= {float(gate_cfg['min_net_pnl']):.8f}"
@@ -78,30 +92,73 @@ def check_promotion_gate(
             f"rank_score 未達標：{float(candidate_rank_score):.8f} < {float(gate_cfg['min_rank_score']):.8f}"
         )
 
+    # 若基本門檻已失敗，直接回傳
+    if reasons:
+        return False, reasons
+
+    # 相對 ACTIVE 檢查
     if active_metrics:
         active_net_pnl = _to_float(active_metrics, "net_pnl")
         active_profit_factor = _to_float(active_metrics, "profit_factor")
         active_max_drawdown = _to_float(active_metrics, "max_drawdown")
 
-        required_net_pnl = active_net_pnl + float(gate_cfg["min_net_pnl_improvement"])
-        if net_pnl < required_net_pnl:
+        min_net_pnl_improvement = float(gate_cfg["min_net_pnl_improvement"])
+        min_profit_factor_improvement = float(gate_cfg["min_profit_factor_improvement"])
+        max_drawdown_relaxation = float(gate_cfg["max_drawdown_relaxation"])
+
+        # 路徑 A：成長型升版
+        growth_required_net_pnl = active_net_pnl + min_net_pnl_improvement
+        growth_required_profit_factor = active_profit_factor + min_profit_factor_improvement
+        growth_allowed_drawdown = active_max_drawdown + max_drawdown_relaxation
+
+        growth_pass = (
+            net_pnl >= growth_required_net_pnl
+            and profit_factor >= growth_required_profit_factor
+            and max_drawdown <= growth_allowed_drawdown
+        )
+
+        # 路徑 B：品質型升版
+        quality_required_net_pnl = active_net_pnl
+        quality_required_profit_factor = active_profit_factor + min_profit_factor_improvement
+        quality_allowed_drawdown = active_max_drawdown
+
+        quality_pass = (
+            net_pnl >= quality_required_net_pnl
+            and profit_factor >= quality_required_profit_factor
+            and max_drawdown <= quality_allowed_drawdown
+        )
+
+        if not growth_pass and not quality_pass:
             reasons.append(
-                f"net_pnl 改善不足：{net_pnl:.8f} < {required_net_pnl:.8f} "
-                f"(active={active_net_pnl:.8f}, need +{float(gate_cfg['min_net_pnl_improvement']):.8f})"
+                "未通過相對 ACTIVE 升版條件："
+                "需符合『成長型升版』或『品質型升版』其中之一"
             )
 
-        required_profit_factor = active_profit_factor + float(gate_cfg["min_profit_factor_improvement"])
-        if profit_factor < required_profit_factor:
-            reasons.append(
-                f"profit_factor 改善不足：{profit_factor:.8f} < {required_profit_factor:.8f} "
-                f"(active={active_profit_factor:.8f}, need +{float(gate_cfg['min_profit_factor_improvement']):.8f})"
-            )
+            if net_pnl < growth_required_net_pnl and net_pnl < quality_required_net_pnl:
+                reasons.append(
+                    f"net_pnl 不足：{net_pnl:.8f} < ACTIVE {active_net_pnl:.8f}"
+                )
+            elif net_pnl < growth_required_net_pnl:
+                reasons.append(
+                    f"net_pnl 未達成長型門檻：{net_pnl:.8f} < {growth_required_net_pnl:.8f} "
+                    f"(active={active_net_pnl:.8f}, need +{min_net_pnl_improvement:.8f})"
+                )
 
-        allowed_drawdown = active_max_drawdown + float(gate_cfg["max_drawdown_relaxation"])
-        if max_drawdown > allowed_drawdown:
-            reasons.append(
-                f"max_drawdown 相對 ACTIVE 惡化過多：{max_drawdown:.8f} > {allowed_drawdown:.8f} "
-                f"(active={active_max_drawdown:.8f}, relax={float(gate_cfg['max_drawdown_relaxation']):.8f})"
-            )
+            if profit_factor < growth_required_profit_factor:
+                reasons.append(
+                    f"profit_factor 改善不足：{profit_factor:.8f} < {growth_required_profit_factor:.8f} "
+                    f"(active={active_profit_factor:.8f}, need +{min_profit_factor_improvement:.8f})"
+                )
+
+            if max_drawdown > growth_allowed_drawdown and max_drawdown > quality_allowed_drawdown:
+                reasons.append(
+                    f"max_drawdown 相對 ACTIVE 惡化過多：{max_drawdown:.8f} > {growth_allowed_drawdown:.8f} "
+                    f"(active={active_max_drawdown:.8f}, relax={max_drawdown_relaxation:.8f})"
+                )
+            elif max_drawdown > quality_allowed_drawdown:
+                reasons.append(
+                    f"max_drawdown 未達品質型門檻：{max_drawdown:.8f} > {quality_allowed_drawdown:.8f} "
+                    f"(active={active_max_drawdown:.8f})"
+                )
 
     return len(reasons) == 0, reasons
