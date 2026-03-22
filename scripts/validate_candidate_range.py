@@ -132,6 +132,7 @@ def _validate_one_candidate(
         "validation_range_start": start_time.isoformat(),
         "validation_range_end": end_time.isoformat(),
         "validation_status": validation_status,
+        "validation_mode": "single_range",
         "candidate_id": int(candidate["candidate_id"]),
         "candidate_no": int(candidate["candidate_no"]),
         "candidate_rank_score": float(candidate["rank_score"]),

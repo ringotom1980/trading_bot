@@ -20,6 +20,16 @@ DEFAULT_PROMOTION_GATE = {
 }
 
 
+DEFAULT_WALK_FORWARD_GATE = {
+    "min_pass_windows": 2,
+    "min_beat_active_windows": 1,
+    "min_pass_ratio": 0.50,
+    "min_avg_net_pnl": 0.0,
+    "min_avg_profit_factor": 1.05,
+    "max_avg_drawdown": 90.0,
+}
+
+
 def _to_float(metrics: dict[str, Any], key: str, default: float = 0.0) -> float:
     return float(metrics.get(key, default) or default)
 
@@ -160,5 +170,68 @@ def check_promotion_gate(
                     f"max_drawdown 未達品質型門檻：{max_drawdown:.8f} > {quality_allowed_drawdown:.8f} "
                     f"(active={active_max_drawdown:.8f})"
                 )
+
+    return len(reasons) == 0, reasons
+
+
+def check_walk_forward_promotion_gate(
+    summary: dict[str, Any],
+    gate: dict[str, Any] | None = None,
+) -> tuple[bool, list[str]]:
+    gate_cfg = dict(DEFAULT_WALK_FORWARD_GATE)
+    if gate:
+        gate_cfg.update(gate)
+
+    reasons: list[str] = []
+
+    total_windows = int(summary.get("total_windows", 0) or 0)
+    pass_windows = int(summary.get("pass_windows", 0) or 0)
+    beat_active_windows = int(summary.get("beat_active_windows", 0) or 0)
+    pass_ratio = float(summary.get("pass_ratio", 0.0) or 0.0)
+
+    avg_net_pnl = float(summary.get("avg_net_pnl", 0.0) or 0.0)
+    avg_profit_factor = float(summary.get("avg_profit_factor", 0.0) or 0.0)
+    avg_max_drawdown = float(summary.get("avg_max_drawdown", 0.0) or 0.0)
+
+    active_avg_net_pnl = float(summary.get("active_avg_net_pnl", 0.0) or 0.0)
+    active_avg_profit_factor = float(summary.get("active_avg_profit_factor", 0.0) or 0.0)
+
+    if total_windows <= 0:
+        reasons.append("total_windows 無效：必須大於 0")
+
+    if pass_windows < int(gate_cfg["min_pass_windows"]):
+        reasons.append(
+            f"pass_windows 未達標：{pass_windows} < {int(gate_cfg['min_pass_windows'])}"
+        )
+
+    if beat_active_windows < int(gate_cfg["min_beat_active_windows"]):
+        reasons.append(
+            f"beat_active_windows 未達標：{beat_active_windows} < {int(gate_cfg['min_beat_active_windows'])}"
+        )
+
+    if pass_ratio < float(gate_cfg["min_pass_ratio"]):
+        reasons.append(
+            f"pass_ratio 未達標：{pass_ratio:.4f} < {float(gate_cfg['min_pass_ratio']):.4f}"
+        )
+
+    if avg_net_pnl < float(gate_cfg["min_avg_net_pnl"]):
+        reasons.append(
+            f"avg_net_pnl 未達標：{avg_net_pnl:.8f} < {float(gate_cfg['min_avg_net_pnl']):.8f}"
+        )
+
+    if avg_profit_factor < float(gate_cfg["min_avg_profit_factor"]):
+        reasons.append(
+            f"avg_profit_factor 未達標：{avg_profit_factor:.8f} < {float(gate_cfg['min_avg_profit_factor']):.8f}"
+        )
+
+    if avg_max_drawdown > float(gate_cfg["max_avg_drawdown"]):
+        reasons.append(
+            f"avg_max_drawdown 超標：{avg_max_drawdown:.8f} > {float(gate_cfg['max_avg_drawdown']):.8f}"
+        )
+
+    if avg_net_pnl < active_avg_net_pnl and avg_profit_factor < active_avg_profit_factor:
+        reasons.append(
+            "walk-forward 相對 ACTIVE 不足：avg_net_pnl 與 avg_profit_factor 皆未優於 ACTIVE"
+        )
 
     return len(reasons) == 0, reasons
