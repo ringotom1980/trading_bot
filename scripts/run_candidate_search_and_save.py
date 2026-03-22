@@ -34,6 +34,29 @@ from storage.repositories.strategy_versions_repo import (
 from storage.repositories.system_events_repo import create_system_event
 
 
+def _format_weight_summary(weights: dict[str, float], top_n: int = 3) -> str:
+    ordered = sorted(weights.items(), key=lambda item: float(item[1]), reverse=True)
+    top_items = ordered[:top_n]
+    return ", ".join(f"{key}={float(value):.4f}" for key, value in top_items)
+
+
+def _print_weight_summary(params: dict[str, object]) -> None:
+    weights = params.get("weights")
+    if not isinstance(weights, dict):
+        print("weights_summary=NONE")
+        return
+
+    long_weights = weights.get("long")
+    short_weights = weights.get("short")
+
+    if not isinstance(long_weights, dict) or not isinstance(short_weights, dict):
+        print("weights_summary=INVALID")
+        return
+
+    print("long_weights_top=" + _format_weight_summary(long_weights))
+    print("short_weights_top=" + _format_weight_summary(short_weights))
+
+
 def _parse_date_to_utc_start(date_text: str) -> datetime:
     dt = datetime.strptime(date_text, "%Y-%m-%d")
     return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
@@ -146,7 +169,7 @@ def main() -> None:
                 params=candidate_params,
                 metrics=metrics,
                 rank_score=rank_score,
-                note="candidate search v2",
+                note="candidate search v3 - generator v5 weights",
             )
             saved_count += 1
 
@@ -238,6 +261,8 @@ def main() -> None:
         print(f"max_drawdown={float(metrics.get('max_drawdown', 0.0)):.8f}")
         print(f"total_trades={int(metrics.get('total_trades', 0))}")
         print(f"win_rate={float(metrics.get('win_rate', 0.0)):.4f}")
+        print(f"mutation_tag={params.get('mutation_tag')}")
+        _print_weight_summary(params)
         print("params=" + json.dumps(params, ensure_ascii=False, sort_keys=True))
         print("")
 

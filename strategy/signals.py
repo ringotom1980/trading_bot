@@ -80,7 +80,11 @@ def _normalize_weights(raw_weights: dict[str, float], allowed_keys: list[str]) -
         value = raw_weights.get(key)
         if value is None:
             continue
-        filtered[key] = float(value)
+        filtered[key] = max(0.000001, float(value))
+
+    if not filtered:
+        equal_weight = 1.0 / len(allowed_keys)
+        return {key: equal_weight for key in allowed_keys}
 
     total = sum(filtered.values())
 
@@ -88,7 +92,20 @@ def _normalize_weights(raw_weights: dict[str, float], allowed_keys: list[str]) -
         equal_weight = 1.0 / len(allowed_keys)
         return {key: equal_weight for key in allowed_keys}
 
-    return {key: filtered.get(key, 0.0) / total for key in allowed_keys}
+    normalized = {
+        key: filtered.get(key, 0.000001) / total
+        for key in allowed_keys
+    }
+
+    normalized_total = sum(normalized.values())
+    if normalized_total <= 0:
+        equal_weight = 1.0 / len(allowed_keys)
+        return {key: equal_weight for key in allowed_keys}
+
+    return {
+        key: normalized[key] / normalized_total
+        for key in allowed_keys
+    }
 
 
 def _resolve_weights(params: dict[str, Any] | None) -> dict[str, dict[str, float]]:

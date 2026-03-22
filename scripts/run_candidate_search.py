@@ -4,6 +4,17 @@ Path: scripts/run_candidate_search.py
 """
 
 from __future__ import annotations
+from storage.repositories.strategy_versions_repo import (
+    get_active_strategy_version,
+    get_strategy_version_by_code,
+)
+from storage.repositories.historical_klines_repo import get_historical_klines_by_range
+from storage.db import connection_scope
+from evolver.scorer import calculate_candidate_score
+from evolver.generator import generate_param_candidates
+from config.settings import load_settings
+from backtest.replay_engine import run_backtest_replay
+from backtest.metrics import calculate_backtest_metrics
 
 import argparse
 from datetime import datetime, timezone
@@ -16,17 +27,29 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from backtest.metrics import calculate_backtest_metrics
-from backtest.replay_engine import run_backtest_replay
-from config.settings import load_settings
-from evolver.generator import generate_param_candidates
-from evolver.scorer import calculate_candidate_score
-from storage.db import connection_scope
-from storage.repositories.historical_klines_repo import get_historical_klines_by_range
-from storage.repositories.strategy_versions_repo import (
-    get_active_strategy_version,
-    get_strategy_version_by_code,
-)
+
+def _format_weight_summary(weights: dict[str, float], top_n: int = 3) -> str:
+    ordered = sorted(
+        weights.items(), key=lambda item: float(item[1]), reverse=True)
+    top_items = ordered[:top_n]
+    return ", ".join(f"{key}={float(value):.4f}" for key, value in top_items)
+
+
+def _print_weight_summary(params: dict[str, object]) -> None:
+    weights = params.get("weights")
+    if not isinstance(weights, dict):
+        print("weights_summary=NONE")
+        return
+
+    long_weights = weights.get("long")
+    short_weights = weights.get("short")
+
+    if not isinstance(long_weights, dict) or not isinstance(short_weights, dict):
+        print("weights_summary=INVALID")
+        return
+
+    print("long_weights_top=" + _format_weight_summary(long_weights))
+    print("short_weights_top=" + _format_weight_summary(short_weights))
 
 
 def _parse_date_to_utc_start(date_text: str) -> datetime:
@@ -44,12 +67,17 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run candidate search v2")
     parser.add_argument("--symbol", type=str, default=None, help="例如 BTCUSDT")
     parser.add_argument("--interval", type=str, default=None, help="例如 15m")
-    parser.add_argument("--start-date", type=str, required=True, help="YYYY-MM-DD")
-    parser.add_argument("--end-date", type=str, required=True, help="YYYY-MM-DD，不含當日")
-    parser.add_argument("--version-code", type=str, default=None, help="不帶則使用 ACTIVE")
+    parser.add_argument("--start-date", type=str,
+                        required=True, help="YYYY-MM-DD")
+    parser.add_argument("--end-date", type=str,
+                        required=True, help="YYYY-MM-DD，不含當日")
+    parser.add_argument("--version-code", type=str,
+                        default=None, help="不帶則使用 ACTIVE")
     parser.add_argument("--top", type=int, default=10, help="顯示前幾名，預設 10")
-    parser.add_argument("--max-candidates", type=int, default=100, help="最多跑幾組 candidate，預設 100")
-    parser.add_argument("--progress-step", type=int, default=10, help="每幾組印一次進度，預設 10")
+    parser.add_argument("--max-candidates", type=int,
+                        default=100, help="最多跑幾組 candidate，預設 100")
+    parser.add_argument("--progress-step", type=int,
+                        default=10, help="每幾組印一次進度，預設 10")
     args = parser.parse_args()
 
     if args.max_candidates <= 0:
@@ -167,6 +195,8 @@ def main() -> None:
         print(f"max_drawdown={float(metrics['max_drawdown']):.8f}")
         print(f"total_trades={int(metrics['total_trades'])}")
         print(f"win_rate={float(metrics['win_rate']):.4f}")
+        print(f"mutation_tag={params.get('mutation_tag')}")
+        _print_weight_summary(params)
         print("params=" + json.dumps(params, ensure_ascii=False, sort_keys=True))
         print("")
 
