@@ -5,15 +5,6 @@ Path: scripts/inspect_strategy_scores.py
 """
 
 from __future__ import annotations
-from strategy.signals import calculate_signal_scores
-from strategy.features import calculate_feature_pack
-from strategy.decision import build_decision_result
-from storage.db import connection_scope, test_connection
-from services.strategy_service import load_active_strategy
-from exchange.market_data import get_latest_klines
-from exchange.binance_client import BinanceClient
-from config.settings import load_settings
-from config.logging import setup_logging
 
 import sys
 from datetime import datetime
@@ -23,6 +14,16 @@ from typing import Any
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
+
+from config.logging import setup_logging
+from config.settings import load_settings
+from exchange.binance_client import BinanceClient
+from exchange.market_data import get_latest_klines
+from services.strategy_service import load_active_strategy
+from storage.db import connection_scope, test_connection
+from strategy.decision import build_decision_result
+from strategy.features import calculate_feature_pack
+from strategy.signals import calculate_signal_scores
 
 
 def _ms_to_local_str(ms: int) -> str:
