@@ -39,8 +39,25 @@ def _parse_date_to_utc_start(date_text: str) -> datetime:
 
 
 def _build_version_code(base_version_code: str, candidate_id: int) -> str:
+    """
+    功能：建立不超過 64 字元的 version_code。
+    規則：
+        - 保留 base 前綴
+        - 加上 ev / candidate_id / timestamp
+        - 超長時自動截斷 base
+    """
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
-    return f"{base_version_code}_ev_{candidate_id}_{stamp}"
+    suffix = f"_ev_{candidate_id}_{stamp}"
+    max_len = 64
+    max_base_len = max_len - len(suffix)
+
+    safe_base = (base_version_code or "strategy").strip()
+    if max_base_len < 8:
+        safe_base = "strategy"
+    elif len(safe_base) > max_base_len:
+        safe_base = safe_base[:max_base_len]
+
+    return f"{safe_base}{suffix}"
 
 
 def _normalize_for_compare(value: Any) -> Any:
