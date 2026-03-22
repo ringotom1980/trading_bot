@@ -117,3 +117,44 @@ def get_order_by_exchange_id(
         symbol=symbol,
         order_id=int(exchange_order_id),
     )
+    
+
+def get_order_trades(
+    client: BinanceClient,
+    *,
+    symbol: str,
+    exchange_order_id: str,
+    limit: int = 100,
+) -> list[dict[str, Any]]:
+    """
+    功能：依 Binance exchange_order_id 查詢該委託的成交明細列表。
+    """
+    response = client.get_account_trades(
+        symbol=symbol,
+        order_id=int(exchange_order_id),
+        limit=limit,
+    )
+    return list(response or [])
+
+
+def calculate_trade_fee_summary(
+    trades: list[dict[str, Any]],
+) -> tuple[float, str | None]:
+    """
+    功能：加總成交明細中的 commission，回傳總手續費與手續費資產。
+    回傳：
+        (fee_total, fee_asset)
+    """
+    fee_total = 0.0
+    fee_asset: str | None = None
+
+    for trade in trades:
+        commission = float(trade.get("commission") or 0.0)
+        fee_total += abs(commission)
+
+        if fee_asset is None:
+            commission_asset = trade.get("commissionAsset")
+            if commission_asset:
+                fee_asset = str(commission_asset)
+
+    return fee_total, fee_asset

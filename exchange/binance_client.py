@@ -140,11 +140,14 @@ class BinanceClient:
         method_upper = method.upper()
 
         if method_upper == "GET":
-            response = self.session.get(url, params=signed_params, timeout=timeout)
+            response = self.session.get(
+                url, params=signed_params, timeout=timeout)
         elif method_upper == "POST":
-            response = self.session.post(url, params=signed_params, timeout=timeout)
+            response = self.session.post(
+                url, params=signed_params, timeout=timeout)
         elif method_upper == "DELETE":
-            response = self.session.delete(url, params=signed_params, timeout=timeout)
+            response = self.session.delete(
+                url, params=signed_params, timeout=timeout)
         else:
             raise ValueError(f"不支援的 HTTP method：{method}")
 
@@ -183,3 +186,31 @@ class BinanceClient:
         功能：發送 Binance 私有 DELETE 請求。
         """
         return self.send_signed_request("DELETE", path, params=params, timeout=timeout)
+
+    def get_account_trades(
+        self,
+        *,
+        symbol: str,
+        order_id: int | None = None,
+        limit: int = 100,
+        timeout: int = 10,
+    ) -> Any:
+        """
+        功能：查詢 Binance Futures 帳戶成交明細（userTrades）。
+        參數：
+            symbol: 交易標的，例如 BTCUSDT。
+            order_id: 指定某一筆 orderId 的成交明細。
+            limit: 回傳筆數上限。
+            timeout: 逾時秒數。
+        回傳：
+            成交明細列表。
+        """
+        params: dict[str, Any] = {
+            "symbol": symbol,
+            "limit": limit,
+    }
+
+        if order_id is not None:
+            params["orderId"] = order_id
+
+        return self.get_signed("/fapi/v1/userTrades", params=params, timeout=timeout)

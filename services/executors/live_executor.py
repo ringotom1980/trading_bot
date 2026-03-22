@@ -12,8 +12,10 @@ from psycopg2.extensions import connection as PgConnection
 from config.settings import Settings
 from exchange.binance_client import BinanceClient
 from exchange.order_executor import (
+    calculate_trade_fee_summary,
     close_position_reduce_only,
     get_order_by_exchange_id,
+    get_order_trades,
     place_market_order,
 )
 from storage.repositories.orders_repo import (
@@ -48,6 +50,28 @@ def _calculate_bars_held(entry_time: datetime, exit_time: datetime) -> int:
     seconds = (exit_time - entry_time).total_seconds()
     bars_held = int(seconds // (15 * 60))
     return max(bars_held, 0)
+
+
+def _fetch_order_fee(
+    client: BinanceClient,
+    *,
+    symbol: str,
+    exchange_order_id: str | None,
+) -> tuple[float, str | None]:
+    """
+    功能：依 exchange_order_id 查詢成交明細並加總手續費。
+    回傳：
+        (fee_total, fee_asset)
+    """
+    if not exchange_order_id:
+        return 0.0, None
+
+    trades = get_order_trades(
+        client,
+        symbol=symbol,
+        exchange_order_id=exchange_order_id,
+    )
+    return calculate_trade_fee_summary(trades)
 
 
 def sync_live_order_status(
@@ -199,7 +223,28 @@ def sync_live_order_status(
     else:
         gross_pnl = (float(open_position["entry_price"]) - avg_price) * qty
 
-    fees = 0.0
+    entry_fee = 0.0
+    exit_fee = 0.0
+
+    from storage.repositories.orders_repo import get_order_by_id
+
+    if open_position["entry_order_id"] is not None:
+        entry_order = get_order_by_id(
+            conn, int(open_position["entry_order_id"]))
+        if entry_order is not None:
+            entry_fee, _entry_fee_asset = _fetch_order_fee(
+                client,
+                symbol=settings.primary_symbol,
+                exchange_order_id=entry_order["exchange_order_id"],
+            )
+
+    exit_fee, _exit_fee_asset = _fetch_order_fee(
+        client,
+        symbol=settings.primary_symbol,
+        exchange_order_id=exchange_order_id,
+    )
+
+    fees = entry_fee + exit_fee
     net_pnl = gross_pnl - fees
     bars_held = _calculate_bars_held(entry_time, exit_time)
 
@@ -688,7 +733,28 @@ def create_live_exit_flow(
     else:
         gross_pnl = (float(open_position["entry_price"]) - avg_price) * qty
 
-    fees = 0.0
+    entry_fee = 0.0
+    exit_fee = 0.0
+
+    if open_position["entry_order_id"] is not None:
+        from storage.repositories.orders_repo import get_order_by_id
+
+        entry_order = get_order_by_id(
+            conn, int(open_position["entry_order_id"]))
+        if entry_order is not None:
+            entry_fee, _entry_fee_asset = _fetch_order_fee(
+                client,
+                symbol=settings.primary_symbol,
+                exchange_order_id=entry_order["exchange_order_id"],
+            )
+
+    exit_fee, _exit_fee_asset = _fetch_order_fee(
+        client,
+        symbol=settings.primary_symbol,
+        exchange_order_id=exchange_order_id,
+    )
+
+    fees = entry_fee + exit_fee
     net_pnl = gross_pnl - fees
     bars_held = _calculate_bars_held(entry_time, exit_time)
 
