@@ -1,6 +1,7 @@
 """
 Path: backtest/replay_engine.py
-說明：Backtest v1 重放引擎，依 historical_klines 逐根計算 feature / signal / decision，並模擬持倉開平倉。
+說明：Backtest v2 重放引擎，依 historical_klines 逐根計算 feature / signal / decision，
+並模擬持倉開平倉，支援 cooldown_bars / min_hold_bars / max_bars_hold。
 """
 
 from __future__ import annotations
@@ -51,11 +52,11 @@ def run_backtest_replay(
     params: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    功能：執行 Backtest v1。
+    功能：執行 Backtest v2。
     說明：
         - 使用與 runtime 同源的 feature / signal / decision
         - 以 historical_klines 逐根重放
-        - 第一版先用固定 qty 與簡化 fee 模型
+        - 支援 cooldown_bars / min_hold_bars / max_bars_hold
     """
     if len(klines) < 61:
         raise ValueError("回測資料不足，至少需要 61 根 K 線")
@@ -63,11 +64,16 @@ def run_backtest_replay(
     qty = float(params.get("qty", 0.01))
     fee_rate = float(params.get("fee_rate", 0.0004))
     warmup_bars = int(params.get("warmup_bars", 60))
+    cooldown_bars = int(params.get("cooldown_bars", 0))
+    min_hold_bars = int(params.get("min_hold_bars", 0))
+    max_bars_hold = int(params.get("max_bars_hold", 0))
 
     if warmup_bars < 60:
         warmup_bars = 60
 
     current_position: dict[str, Any] | None = None
+    last_exit_bar_index: int | None = None
+
     equity = 0.0
     equity_curve: list[float] = []
     trades: list[dict[str, Any]] = []
@@ -85,28 +91,49 @@ def run_backtest_replay(
 
         signal_scores = calculate_signal_scores(feature_pack, params)
 
-
         decision_result = calculate_decision(
             long_score=signal_scores["long_score"],
             short_score=signal_scores["short_score"],
             current_position_side=current_position["side"] if current_position else None,
             params=params,
-)
-
-        decisions.append(
-            {
-                "bar_close_time": _to_bar_close_time_value(latest["close_time"]),
-                "decision": decision_result["decision"],
-                "long_score": float(signal_scores["long_score"]),
-                "short_score": float(signal_scores["short_score"]),
-            }
         )
 
         close_price = float(latest["close"])
         close_time = latest["close_time"]
 
+        effective_decision = decision_result["decision"]
+        effective_reason = decision_result["reason_code"]
+
         if current_position is None:
-            if decision_result["decision"] == "ENTER_LONG":
+            if effective_decision in {"ENTER_LONG", "ENTER_SHORT"} and last_exit_bar_index is not None:
+                bars_since_exit = idx - last_exit_bar_index
+                if bars_since_exit < cooldown_bars:
+                    effective_decision = "WAIT"
+                    effective_reason = "COOLDOWN_BLOCKED"
+
+        else:
+            bars_held = idx - int(current_position["entry_bar_index"])
+
+            if max_bars_hold > 0 and bars_held >= max_bars_hold:
+                effective_decision = "EXIT"
+                effective_reason = "MAX_BARS_HOLD_EXIT"
+
+            elif effective_decision == "EXIT" and bars_held < min_hold_bars:
+                effective_decision = "HOLD"
+                effective_reason = "MIN_HOLD_BLOCKED"
+
+        decisions.append(
+            {
+                "bar_close_time": _to_bar_close_time_value(latest["close_time"]),
+                "decision": effective_decision,
+                "reason_code": effective_reason,
+                "long_score": float(signal_scores["long_score"]),
+                "short_score": float(signal_scores["short_score"]),
+            }
+        )
+
+        if current_position is None:
+            if effective_decision == "ENTER_LONG":
                 entry_fee = close_price * qty * fee_rate
                 current_position = {
                     "strategy_version_id": strategy_version_id,
@@ -118,10 +145,10 @@ def run_backtest_replay(
                     "entry_time": close_time,
                     "entry_bar_index": idx,
                     "entry_fee": entry_fee,
-                    "entry_decision": decision_result["decision"],
+                    "entry_decision": effective_decision,
                 }
 
-            elif decision_result["decision"] == "ENTER_SHORT":
+            elif effective_decision == "ENTER_SHORT":
                 entry_fee = close_price * qty * fee_rate
                 current_position = {
                     "strategy_version_id": strategy_version_id,
@@ -133,11 +160,11 @@ def run_backtest_replay(
                     "entry_time": close_time,
                     "entry_bar_index": idx,
                     "entry_fee": entry_fee,
-                    "entry_decision": decision_result["decision"],
+                    "entry_decision": effective_decision,
                 }
 
         else:
-            if decision_result["decision"] == "EXIT":
+            if effective_decision == "EXIT":
                 gross_pnl = _calc_pnl(
                     side=current_position["side"],
                     entry_price=float(current_position["entry_price"]),
@@ -163,12 +190,14 @@ def run_backtest_replay(
                     "fees": fees,
                     "net_pnl": net_pnl,
                     "bars_held": bars_held,
+                    "exit_reason": effective_reason,
                 }
                 trades.append(trade)
 
                 equity += net_pnl
                 equity_curve.append(equity)
                 current_position = None
+                last_exit_bar_index = idx
 
     return {
         "symbol": symbol,
