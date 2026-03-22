@@ -1,7 +1,8 @@
 """
 Path: backtest/replay_engine.py
-說明：Backtest v2 重放引擎，依 historical_klines 逐根計算 feature / signal / decision，
-並模擬持倉開平倉，支援 cooldown_bars / min_hold_bars / max_bars_hold。
+說明：Backtest v3 重放引擎，依 historical_klines 逐根計算 feature / signal / decision，
+並模擬持倉開平倉，支援 cooldown_bars / min_hold_bars / max_bars_hold /
+hard_stop_loss_pct / take_profit_pct。
 """
 
 from __future__ import annotations
@@ -43,6 +44,22 @@ def _to_bar_close_time_value(value: Any) -> int:
     return int(value)
 
 
+def _calc_return_pct(*, side: str, entry_price: float, current_price: float) -> float:
+    """
+    功能：計算目前持倉報酬率。
+    """
+    if entry_price == 0:
+        return 0.0
+
+    if side == "LONG":
+        return (current_price - entry_price) / entry_price
+
+    if side == "SHORT":
+        return (entry_price - current_price) / entry_price
+
+    raise ValueError(f"不支援的 side：{side}")
+
+
 def run_backtest_replay(
     *,
     klines: list[dict[str, Any]],
@@ -52,11 +69,12 @@ def run_backtest_replay(
     params: dict[str, Any],
 ) -> dict[str, Any]:
     """
-    功能：執行 Backtest v2。
+    功能：執行 Backtest v3。
     說明：
         - 使用與 runtime 同源的 feature / signal / decision
         - 以 historical_klines 逐根重放
         - 支援 cooldown_bars / min_hold_bars / max_bars_hold
+        - 支援 hard_stop_loss_pct / take_profit_pct
     """
     if len(klines) < 61:
         raise ValueError("回測資料不足，至少需要 61 根 K 線")
@@ -67,6 +85,8 @@ def run_backtest_replay(
     cooldown_bars = int(params.get("cooldown_bars", 0))
     min_hold_bars = int(params.get("min_hold_bars", 0))
     max_bars_hold = int(params.get("max_bars_hold", 0))
+    hard_stop_loss_pct = float(params.get("hard_stop_loss_pct", 0.0))
+    take_profit_pct = float(params.get("take_profit_pct", 0.0))
 
     if warmup_bars < 60:
         warmup_bars = 60
@@ -113,8 +133,21 @@ def run_backtest_replay(
 
         else:
             bars_held = idx - int(current_position["entry_bar_index"])
+            current_return_pct = _calc_return_pct(
+                side=str(current_position["side"]),
+                entry_price=float(current_position["entry_price"]),
+                current_price=close_price,
+            )
 
-            if max_bars_hold > 0 and bars_held >= max_bars_hold:
+            if hard_stop_loss_pct > 0 and current_return_pct <= -hard_stop_loss_pct:
+                effective_decision = "EXIT"
+                effective_reason = "HARD_STOP_LOSS"
+
+            elif take_profit_pct > 0 and current_return_pct >= take_profit_pct:
+                effective_decision = "EXIT"
+                effective_reason = "TAKE_PROFIT"
+
+            elif max_bars_hold > 0 and bars_held >= max_bars_hold:
                 effective_decision = "EXIT"
                 effective_reason = "MAX_BARS_HOLD_EXIT"
 
