@@ -55,7 +55,7 @@ def main() -> None:
                     system_state["active_strategy_version_id"])
 
         logger.info("ACTIVE_STRATEGY_ID=%s",
-                    active_strategy["strategy_version_id"])
+                active_strategy["strategy_version_id"])
         logger.info("ACTIVE_VERSION_CODE=%s", active_strategy["version_code"])
         logger.info("ACTIVE_STATUS=%s", active_strategy["status"])
         logger.info("ACTIVE_SOURCE_TYPE=%s", active_strategy["source_type"])
@@ -68,11 +68,11 @@ def main() -> None:
             system_state=system_state,
         )
 
-        run_runtime_loop(
-            conn,
-            settings=settings,
-            poll_interval_seconds=5,
-        )
+
+    run_runtime_loop(
+        settings=settings,
+        poll_interval_seconds=5,
+    )
 
 
 if __name__ == "__main__":

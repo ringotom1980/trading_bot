@@ -168,7 +168,13 @@ def execute_entry_flow(
             decision_result=decision_result,
             decision_id=decision_id,
         )
-        return False, linked_order_id, position_id_after, position_side_after, guard_reason
+        executed = (
+            guard_reason is None
+            and linked_order_id is not None
+            and position_id_after is not None
+            and position_side_after is not None
+        )
+        return executed, linked_order_id, position_id_after, position_side_after, guard_reason
 
     return False, None, None, None, f"不支援的 trade_mode：{trade_mode}"
 
@@ -209,7 +215,11 @@ def execute_exit_flow(
             latest_kline=latest_kline,
             decision_id=decision_id,
         )
-        return False, linked_order_id, last_trade_id, guard_reason
+        executed = (
+            guard_reason is None
+            and linked_order_id is not None
+        )
+        return executed, linked_order_id, last_trade_id, guard_reason
 
     return False, None, None, f"不支援的 trade_mode：{trade_mode}"
 

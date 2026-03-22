@@ -19,6 +19,7 @@ from services.execution_service import record_runtime_decision
 from services.strategy_service import load_active_strategy
 from storage.repositories.system_events_repo import create_system_event
 from storage.repositories.system_state_repo import get_system_state
+from storage.db import connection_scope
 
 
 def run_runtime_once(
@@ -108,7 +109,6 @@ def run_runtime_once(
 
 
 def run_runtime_loop(
-    conn: PgConnection,
     *,
     settings: Settings,
     poll_interval_seconds: int = 5,
@@ -116,11 +116,11 @@ def run_runtime_loop(
     """
     功能：以前景常駐模式持續執行 runtime。
     說明：
+        - 每輪重新開一個 connection_scope，避免長交易不 commit。
         - 每輪重新載入 ACTIVE 策略，避免後續升版後仍使用舊策略。
         - 每輪呼叫 run_runtime_once()。
         - 若單輪失敗，記錄 log 後不中斷整體迴圈。
     參數：
-        conn: PostgreSQL 連線物件。
         settings: 全域設定物件。
         poll_interval_seconds: 輪詢秒數。
     """
@@ -129,13 +129,14 @@ def run_runtime_loop(
 
     while True:
         try:
-            active_strategy = load_active_strategy(conn)
+            with connection_scope() as conn:
+                active_strategy = load_active_strategy(conn)
 
-            run_runtime_once(
-                conn,
-                settings=settings,
-                active_strategy=active_strategy,
-            )
+                run_runtime_once(
+                    conn,
+                    settings=settings,
+                    active_strategy=active_strategy,
+                )
 
         except KeyboardInterrupt:
             logger.info("收到 KeyboardInterrupt，結束 runtime loop")
