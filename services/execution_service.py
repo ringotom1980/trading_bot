@@ -28,6 +28,11 @@ from services.executors.simulated_executor import (
     create_simulated_entry_flow,
     create_simulated_exit_flow,
 )
+from config.constants import (
+    TRADE_MODE_SIMULATION,
+    TRADE_MODE_TESTNET,
+    TRADE_MODE_LIVE,
+)
 from storage.repositories.decisions_repo import (
     get_decision_by_bar_close_time,
     insert_decision_log,
@@ -139,7 +144,7 @@ def execute_entry_flow(
     """
     trade_mode = str(system_state["trade_mode"])
 
-    if trade_mode == "TESTNET":
+    if trade_mode == TRADE_MODE_SIMULATION:
         linked_order_id, position_id_after, position_side_after = create_simulated_entry_flow(
             conn,
             settings=settings,
@@ -151,7 +156,7 @@ def execute_entry_flow(
         )
         return True, linked_order_id, position_id_after, position_side_after, None
 
-    if trade_mode == "LIVE":
+    if trade_mode in {TRADE_MODE_TESTNET, TRADE_MODE_LIVE}:
         linked_order_id, position_id_after, position_side_after, guard_reason = create_live_entry_flow(
             conn,
             settings=settings,
@@ -182,7 +187,7 @@ def execute_exit_flow(
     """
     trade_mode = str(system_state["trade_mode"])
 
-    if trade_mode == "TESTNET":
+    if trade_mode == TRADE_MODE_SIMULATION:
         linked_order_id, _closed_position_id, last_trade_id = create_simulated_exit_flow(
             conn,
             settings=settings,
@@ -193,7 +198,7 @@ def execute_exit_flow(
         )
         return True, linked_order_id, last_trade_id, None
 
-    if trade_mode == "LIVE":
+    if trade_mode in {TRADE_MODE_TESTNET, TRADE_MODE_LIVE}:
         linked_order_id, _closed_position_id, last_trade_id, guard_reason = create_live_exit_flow(
             conn,
             settings=settings,

@@ -177,7 +177,7 @@ def load_settings() -> Settings:
         allow_none=False,
     )
 
-    raw_trade_mode = _get_env("TRADE_MODE", "TESTNET")
+    raw_trade_mode = _get_env("TRADE_MODE", "SIMULATION")
     trade_mode = _validate_choice(
         name="TRADE_MODE",
         value=raw_trade_mode,
