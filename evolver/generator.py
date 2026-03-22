@@ -1,6 +1,6 @@
 """
 Path: evolver/generator.py
-說明：Candidate Generator v3，從 base strategy params 產生候選參數組合。
+說明：Candidate Generator v4，採偏保守的縮窄搜尋，優先降低噪音交易、壓回撤、提高 PF。
 """
 
 from __future__ import annotations
@@ -14,24 +14,25 @@ def generate_param_candidates(
     base_params: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """
-    功能：根據 base strategy 產生第三版候選參數組合。
+    功能：根據 base strategy 產生第四版候選參數組合。
     說明：
-        - 搜尋 decision thresholds
-        - 搜尋 cooldown / hold 管理參數
-        - 搜尋 hard stop loss / take profit
-        - qty / fee_rate / weights 等其餘欄位沿用 base
+        - 改為偏保守搜尋
+        - 提高進出場門檻
+        - 拉大 cooldown
+        - 保留 hard stop loss / take profit 搜尋
+        - 其餘欄位沿用 base
     """
-    entry_threshold_values = [0.55, 0.60, 0.65]
-    exit_threshold_values = [0.40, 0.45, 0.50]
-    reverse_threshold_values = [0.65, 0.70]
-    reverse_gap_values = [0.08, 0.12]
+    entry_threshold_values = [0.60, 0.65, 0.70]
+    exit_threshold_values = [0.45, 0.50, 0.55]
+    reverse_threshold_values = [0.70, 0.75, 0.80]
+    reverse_gap_values = [0.10, 0.12, 0.15]
 
-    cooldown_bars_values = [1, 2, 3]
-    min_hold_bars_values = [2, 3, 4]
+    cooldown_bars_values = [2, 3, 4, 6]
+    min_hold_bars_values = [3, 4, 6]
     max_bars_hold_values = [12, 24, 36]
 
     hard_stop_loss_pct_values = [0.01, 0.015, 0.02]
-    take_profit_pct_values = [0.0, 0.01, 0.015, 0.02]
+    take_profit_pct_values = [0.01, 0.015, 0.02, 0.03]
 
     candidates: list[dict[str, Any]] = []
 
@@ -68,7 +69,10 @@ def generate_param_candidates(
         if hard_stop_loss_pct <= 0:
             continue
 
-        if take_profit_pct > 0 and take_profit_pct <= hard_stop_loss_pct * 0.5:
+        if take_profit_pct <= 0:
+            continue
+
+        if take_profit_pct <= hard_stop_loss_pct:
             continue
 
         params = dict(base_params)
