@@ -64,8 +64,12 @@ def _params_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
     return _normalize_for_compare(left) == _normalize_for_compare(right)
 
 
+def _build_active_metrics(active_strategy: dict[str, Any]) -> dict[str, Any]:
+    return dict(active_strategy.get("backtest_summary_json") or {})
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Auto promote best candidate v1")
+    parser = argparse.ArgumentParser(description="Auto promote best candidate v2")
     parser.add_argument("--start-date", type=str, required=True)
     parser.add_argument("--end-date", type=str, required=True)
     parser.add_argument("--top-limit", type=int, default=10)
@@ -153,29 +157,63 @@ def main() -> None:
             print("auto promote 中止：找不到 candidate")
             return
 
-        best_candidate = top_candidates[0]
-        best_candidate_id = int(best_candidate["candidate_id"])
-        metrics = dict(best_candidate["metrics_json"] or {})
-        params = dict(best_candidate["params_json"] or {})
         active_params = dict(active_strategy["params_json"] or {})
+        active_metrics = _build_active_metrics(active_strategy)
 
-        if _params_equal(params, active_params):
-            update_strategy_candidate_status(
-                conn,
-                candidate_id=best_candidate_id,
-                candidate_status="REJECTED",
-                note="candidate params 與目前 ACTIVE 相同",
+        best_candidate = None
+        best_candidate_id: int | None = None
+        metrics: dict[str, Any] = {}
+        params: dict[str, Any] = {}
+        selected_rank_score: float | None = None
+
+        for candidate in top_candidates:
+            candidate_id = int(candidate["candidate_id"])
+            candidate_metrics = dict(candidate["metrics_json"] or {})
+            candidate_params = dict(candidate["params_json"] or {})
+            candidate_rank_score = float(candidate["rank_score"])
+
+            if _params_equal(candidate_params, active_params):
+                update_strategy_candidate_status(
+                    conn,
+                    candidate_id=candidate_id,
+                    candidate_status="REJECTED",
+                    note="candidate params 與目前 ACTIVE 相同",
+                )
+                continue
+
+            passed, reasons = check_promotion_gate(
+                candidate_metrics=candidate_metrics,
+                active_metrics=active_metrics,
+                candidate_rank_score=candidate_rank_score,
             )
 
+            if not passed:
+                update_strategy_candidate_status(
+                    conn,
+                    candidate_id=candidate_id,
+                    candidate_status="REJECTED",
+                    note="; ".join(reasons),
+                )
+                continue
+
+            best_candidate = candidate
+            best_candidate_id = candidate_id
+            metrics = candidate_metrics
+            params = candidate_params
+            selected_rank_score = candidate_rank_score
+            break
+
+        if best_candidate is None or best_candidate_id is None or selected_rank_score is None:
             create_system_event(
                 conn,
                 event_type="GUARD_TRIGGERED",
                 event_level="INFO",
                 source="SYSTEM",
-                message="auto promote 中止：candidate params 與目前 ACTIVE 相同",
+                message="auto promote 中止：top candidates 全數未通過 gate",
                 details={
-                    "candidate_id": best_candidate_id,
                     "active_strategy_version_id": active_strategy_version_id,
+                    "candidate_checked_count": len(top_candidates),
+                    "active_metrics": active_metrics,
                 },
                 created_by="auto_promote_best_candidate",
                 engine_mode_before=system_state["engine_mode"],
@@ -190,48 +228,7 @@ def main() -> None:
                 strategy_version_after=active_strategy_version_id,
             )
 
-            print("auto promote 中止：candidate params 與目前 ACTIVE 相同")
-            return
-
-        passed, reasons = check_promotion_gate(metrics)
-
-        if not passed:
-            reject_note = "; ".join(reasons)
-
-            update_strategy_candidate_status(
-                conn,
-                candidate_id=best_candidate_id,
-                candidate_status="REJECTED",
-                note=reject_note,
-            )
-
-            create_system_event(
-                conn,
-                event_type="GUARD_TRIGGERED",
-                event_level="INFO",
-                source="SYSTEM",
-                message="auto promote 中止：best candidate 未通過 gate",
-                details={
-                    "candidate_id": best_candidate_id,
-                    "reasons": reasons,
-                    "metrics": metrics,
-                },
-                created_by="auto_promote_best_candidate",
-                engine_mode_before=system_state["engine_mode"],
-                engine_mode_after=system_state["engine_mode"],
-                trade_mode_before=system_state["trade_mode"],
-                trade_mode_after=system_state["trade_mode"],
-                trading_state_before=system_state["trading_state"],
-                trading_state_after=system_state["trading_state"],
-                live_armed_before=system_state["live_armed"],
-                live_armed_after=system_state["live_armed"],
-                strategy_version_before=active_strategy_version_id,
-                strategy_version_after=active_strategy_version_id,
-            )
-
-            print("auto promote 中止：best candidate 未通過 gate")
-            for reason in reasons:
-                print(f"- {reason}")
+            print("auto promote 中止：top candidates 全數未通過 gate")
             return
 
         new_version_code = _build_version_code(
@@ -259,7 +256,7 @@ def main() -> None:
                 "tested_range_end": end_time.isoformat(),
                 "gate_passed": True,
             },
-            promotion_score=float(best_candidate["rank_score"]),
+            promotion_score=float(selected_rank_score),
             note=f"auto promoted from candidate_id={best_candidate_id}",
         )
 
@@ -289,6 +286,7 @@ def main() -> None:
                 "new_strategy_version_id": new_strategy_version_id,
                 "new_version_code": new_version_code,
                 "metrics": metrics,
+                "promotion_score": float(selected_rank_score),
             },
             created_by="auto_promote_best_candidate",
             engine_mode_before=system_state["engine_mode"],
