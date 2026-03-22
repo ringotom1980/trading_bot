@@ -1,6 +1,6 @@
 """
 Path: strategy/features.py
-說明：第一版特徵計算模組，負責將 K 線資料轉為策略可用的 feature pack。
+說明：Feature Pool v1，負責將 K 線資料轉為策略可用的 feature pack，供 runtime、backtest、candidate 共用。
 """
 
 from __future__ import annotations
@@ -11,51 +11,32 @@ from typing import Any
 
 
 def _extract_closes(klines: list[dict[str, Any]]) -> list[float]:
-    """
-    功能：從 K 線資料中取出收盤價序列。
-    參數：
-        klines: K 線資料列表。
-    回傳：
-        收盤價列表。
-    """
     return [float(kline["close"]) for kline in klines]
 
 
+def _extract_opens(klines: list[dict[str, Any]]) -> list[float]:
+    return [float(kline["open"]) for kline in klines]
+
+
+def _extract_highs(klines: list[dict[str, Any]]) -> list[float]:
+    return [float(kline["high"]) for kline in klines]
+
+
+def _extract_lows(klines: list[dict[str, Any]]) -> list[float]:
+    return [float(kline["low"]) for kline in klines]
+
+
 def _extract_volumes(klines: list[dict[str, Any]]) -> list[float]:
-    """
-    功能：從 K 線資料中取出成交量序列。
-    參數：
-        klines: K 線資料列表。
-    回傳：
-        成交量列表。
-    """
     return [float(kline["volume"]) for kline in klines]
 
 
 def _simple_moving_average(values: list[float], window: int) -> float:
-    """
-    功能：計算簡單移動平均。
-    參數：
-        values: 數值序列。
-        window: 視窗大小。
-    回傳：
-        SMA 數值。
-    """
     if len(values) < window:
         raise ValueError(f"資料不足，無法計算 SMA{window}")
-
     return mean(values[-window:])
 
 
 def _linear_slope(values: list[float], window: int) -> float:
-    """
-    功能：以最小平方法計算最近 window 筆資料斜率。
-    參數：
-        values: 數值序列。
-        window: 視窗大小。
-    回傳：
-        斜率值。
-    """
     if len(values) < window:
         raise ValueError(f"資料不足，無法計算 slope_{window}")
 
@@ -75,13 +56,6 @@ def _linear_slope(values: list[float], window: int) -> float:
 
 
 def _returns(values: list[float]) -> list[float]:
-    """
-    功能：計算相鄰收盤價報酬率序列。
-    參數：
-        values: 收盤價序列。
-    回傳：
-        報酬率列表。
-    """
     if len(values) < 2:
         return []
 
@@ -99,13 +73,6 @@ def _returns(values: list[float]) -> list[float]:
 
 
 def _standard_deviation(values: list[float]) -> float:
-    """
-    功能：計算標準差。
-    參數：
-        values: 數值序列。
-    回傳：
-        標準差數值。
-    """
     if not values:
         return 0.0
 
@@ -114,9 +81,40 @@ def _standard_deviation(values: list[float]) -> float:
     return sqrt(variance)
 
 
+def _pct_change(values: list[float], bars: int) -> float:
+    if len(values) < bars + 1:
+        raise ValueError(f"資料不足，無法計算 return_{bars}")
+
+    prev_value = values[-(bars + 1)]
+    curr_value = values[-1]
+
+    if prev_value == 0:
+        return 0.0
+
+    return (curr_value - prev_value) / prev_value
+
+
+def _avg_range_pct(klines: list[dict[str, Any]], window: int) -> float:
+    if len(klines) < window:
+        raise ValueError(f"資料不足，無法計算 range_pct_{window}_avg")
+
+    values: list[float] = []
+    for kline in klines[-window:]:
+        high = float(kline["high"])
+        low = float(kline["low"])
+        close = float(kline["close"])
+
+        if close == 0:
+            values.append(0.0)
+        else:
+            values.append((high - low) / close)
+
+    return mean(values)
+
+
 def calculate_feature_pack(symbol: str, interval: str, klines: list[dict[str, Any]]) -> dict[str, Any]:
     """
-    功能：依 K 線資料計算第一版特徵包。
+    功能：依 K 線資料計算 Feature Pool v1。
     參數：
         symbol: 交易標的。
         interval: K 線週期。
@@ -125,45 +123,115 @@ def calculate_feature_pack(symbol: str, interval: str, klines: list[dict[str, An
         特徵包字典。
     """
     if len(klines) < 60:
-        raise ValueError("資料不足，至少需要 60 根 K 線才能計算第一版特徵")
+        raise ValueError("資料不足，至少需要 60 根 K 線才能計算 Feature Pool v1")
 
+    opens = _extract_opens(klines)
+    highs = _extract_highs(klines)
+    lows = _extract_lows(klines)
     closes = _extract_closes(klines)
     volumes = _extract_volumes(klines)
 
     latest = klines[-1]
-    latest_close = float(latest["close"])
+    latest_open = float(latest["open"])
     latest_high = float(latest["high"])
     latest_low = float(latest["low"])
+    latest_close = float(latest["close"])
     latest_volume = float(latest["volume"])
 
+    sma5 = _simple_moving_average(closes, 5)
+    sma10 = _simple_moving_average(closes, 10)
     sma20 = _simple_moving_average(closes, 20)
     sma60 = _simple_moving_average(closes, 60)
 
+    close_vs_sma5_pct = 0.0 if sma5 == 0 else (latest_close - sma5) / sma5
+    close_vs_sma10_pct = 0.0 if sma10 == 0 else (latest_close - sma10) / sma10
     close_vs_sma20_pct = 0.0 if sma20 == 0 else (latest_close - sma20) / sma20
     close_vs_sma60_pct = 0.0 if sma60 == 0 else (latest_close - sma60) / sma60
+
+    sma5_vs_sma20_pct = 0.0 if sma20 == 0 else (sma5 - sma20) / sma20
+    sma20_vs_sma60_pct = 0.0 if sma60 == 0 else (sma20 - sma60) / sma60
+
+    return_1 = _pct_change(closes, 1)
+    return_3 = _pct_change(closes, 3)
+    return_5 = _pct_change(closes, 5)
+    return_10 = _pct_change(closes, 10)
 
     slope_5 = _linear_slope(closes, 5)
     slope_10 = _linear_slope(closes, 10)
 
     range_pct = 0.0 if latest_close == 0 else (latest_high - latest_low) / latest_close
+    range_pct_3_avg = _avg_range_pct(klines, 3)
+    range_pct_5_avg = _avg_range_pct(klines, 5)
 
-    returns_10 = _returns(closes[-10:])
+    returns_5 = _returns(closes[-6:])
+    returns_10 = _returns(closes[-11:])
+    returns_20 = _returns(closes[-21:])
+
+    volatility_5 = _standard_deviation(returns_5)
     volatility_10 = _standard_deviation(returns_10)
+    volatility_20 = _standard_deviation(returns_20)
 
+    avg_volume_5 = _simple_moving_average(volumes, 5)
+    avg_volume_10 = _simple_moving_average(volumes, 10)
     avg_volume_20 = _simple_moving_average(volumes, 20)
+
+    volume_ratio_5 = 0.0 if avg_volume_5 == 0 else latest_volume / avg_volume_5
+    volume_ratio_10 = 0.0 if avg_volume_10 == 0 else latest_volume / avg_volume_10
     volume_ratio_20 = 0.0 if avg_volume_20 == 0 else latest_volume / avg_volume_20
+
     volume_slope_5 = _linear_slope(volumes, 5)
+    volume_slope_10 = _linear_slope(volumes, 10)
+
+    body = latest_close - latest_open
+    full_range = latest_high - latest_low
+    upper_wick = latest_high - max(latest_open, latest_close)
+    lower_wick = min(latest_open, latest_close) - latest_low
+
+    body_pct = 0.0 if full_range == 0 else abs(body) / full_range
+    upper_wick_pct = 0.0 if full_range == 0 else upper_wick / full_range
+    lower_wick_pct = 0.0 if full_range == 0 else lower_wick / full_range
+    close_position_in_bar = 0.0 if full_range == 0 else (latest_close - latest_low) / full_range
+
+    bullish_bar_flag = 1.0 if latest_close > latest_open else 0.0
+    bearish_bar_flag = 1.0 if latest_close < latest_open else 0.0
 
     return {
         "symbol": symbol,
         "interval": interval,
         "bar_close_time": int(latest["close_time"]),
+
+        "close_vs_sma5_pct": close_vs_sma5_pct,
+        "close_vs_sma10_pct": close_vs_sma10_pct,
         "close_vs_sma20_pct": close_vs_sma20_pct,
         "close_vs_sma60_pct": close_vs_sma60_pct,
+        "sma5_vs_sma20_pct": sma5_vs_sma20_pct,
+        "sma20_vs_sma60_pct": sma20_vs_sma60_pct,
+
+        "return_1": return_1,
+        "return_3": return_3,
+        "return_5": return_5,
+        "return_10": return_10,
+
         "slope_5": slope_5,
         "slope_10": slope_10,
+
         "range_pct": range_pct,
+        "range_pct_3_avg": range_pct_3_avg,
+        "range_pct_5_avg": range_pct_5_avg,
+        "volatility_5": volatility_5,
         "volatility_10": volatility_10,
+        "volatility_20": volatility_20,
+
+        "volume_ratio_5": volume_ratio_5,
+        "volume_ratio_10": volume_ratio_10,
         "volume_ratio_20": volume_ratio_20,
         "volume_slope_5": volume_slope_5,
+        "volume_slope_10": volume_slope_10,
+
+        "body_pct": body_pct,
+        "upper_wick_pct": upper_wick_pct,
+        "lower_wick_pct": lower_wick_pct,
+        "close_position_in_bar": close_position_in_bar,
+        "bullish_bar_flag": bullish_bar_flag,
+        "bearish_bar_flag": bearish_bar_flag,
     }
