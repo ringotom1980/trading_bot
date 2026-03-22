@@ -116,24 +116,40 @@ def _extract_family_tag(params: dict[str, Any]) -> str:
     功能：從 mutation_tag 萃出 family，用來限制同一家族的候選數量。
     規則：
         - threshold+weight 組合時，以 weight family 為主
+          例如：reverse_gap:-0.02+momentum_only -> momentum_only
         - 純 threshold 變化時，用 threshold:<field>
+          例如：max_bars_hold:+12 -> threshold:max_bars_hold
+        - 純 weight mutation 時，直接回傳 mutation_tag
+          例如：momentum_only -> momentum_only
         - 沒有 mutation_tag 時，視為 base
     """
     mutation_tag = str(params.get("mutation_tag") or "").strip()
     if not mutation_tag:
         return "base"
 
-    if "+" in mutation_tag:
-        parts = [part.strip() for part in mutation_tag.split("+") if part.strip()]
-        for part in reversed(parts):
-            if ":" not in part:
-                return part
-        return parts[-1] if parts else "unknown"
+    known_weight_families = {
+        "trend_up",
+        "momentum_up",
+        "volume_up",
+        "trend_momentum_up",
+        "trend_only",
+        "momentum_only",
+        "long_trend_short_momentum",
+        "long_momentum_short_trend",
+    }
 
+    # 先判斷是不是「threshold + weight」組合
+    for family in known_weight_families:
+        suffix = f"+{family}"
+        if mutation_tag.endswith(suffix):
+            return family
+
+    # 純 threshold mutation
     if ":" in mutation_tag:
         field_name = mutation_tag.split(":", 1)[0].strip()
         return f"threshold:{field_name}"
 
+    # 純 weight mutation
     return mutation_tag
 
 
