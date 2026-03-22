@@ -1,6 +1,6 @@
 """
 Path: storage/repositories/strategy_candidates_repo.py
-說明：strategy_candidates 資料表存取層，負責建立與查詢 candidate 結果。
+說明：strategy_candidates 資料表存取層，負責建立、查詢、更新 candidate 結果。
 """
 
 from __future__ import annotations
@@ -114,47 +114,81 @@ def get_top_strategy_candidates(
     tested_range_start: datetime,
     tested_range_end: datetime,
     limit: int = 10,
+    ignore_range: bool = False,
 ) -> list[dict[str, Any]]:
     """
-    功能：查詢指定來源版本與測試區間的 top candidates。
+    功能：查詢指定來源版本的 top candidates。
+    說明：
+        - 預設會依 tested_range_start / tested_range_end 篩選
+        - ignore_range=True 時，忽略區間，只抓該版本/symbol/interval 下 top candidates
     """
-    sql = """
-    SELECT
-        candidate_id,
-        source_strategy_version_id,
-        symbol,
-        interval,
-        tested_range_start,
-        tested_range_end,
-        candidate_no,
-        params_json,
-        metrics_json,
-        rank_score,
-        candidate_status,
-        note,
-        created_at
-    FROM strategy_candidates
-    WHERE source_strategy_version_id = %s
-      AND symbol = %s
-      AND interval = %s
-      AND tested_range_start = %s
-      AND tested_range_end = %s
-    ORDER BY rank_score DESC, candidate_no ASC
-    LIMIT %s
-    """
+    if ignore_range:
+        sql = """
+        SELECT
+            candidate_id,
+            source_strategy_version_id,
+            symbol,
+            interval,
+            tested_range_start,
+            tested_range_end,
+            candidate_no,
+            params_json,
+            metrics_json,
+            rank_score,
+            candidate_status,
+            note,
+            created_at
+        FROM strategy_candidates
+        WHERE source_strategy_version_id = %s
+          AND symbol = %s
+          AND interval = %s
+        ORDER BY rank_score DESC, candidate_no ASC
+        LIMIT %s
+        """
+
+        params = (
+            source_strategy_version_id,
+            symbol,
+            interval,
+            limit,
+        )
+    else:
+        sql = """
+        SELECT
+            candidate_id,
+            source_strategy_version_id,
+            symbol,
+            interval,
+            tested_range_start,
+            tested_range_end,
+            candidate_no,
+            params_json,
+            metrics_json,
+            rank_score,
+            candidate_status,
+            note,
+            created_at
+        FROM strategy_candidates
+        WHERE source_strategy_version_id = %s
+          AND symbol = %s
+          AND interval = %s
+          AND tested_range_start = %s
+          AND tested_range_end = %s
+        ORDER BY rank_score DESC, candidate_no ASC
+        LIMIT %s
+        """
+
+        params = (
+            source_strategy_version_id,
+            symbol,
+            interval,
+            tested_range_start,
+            tested_range_end,
+            limit,
+        )
 
     with conn.cursor() as cursor:
-        cursor.execute(
-            sql,
-            (
-                source_strategy_version_id,
-                symbol,
-                interval,
-                tested_range_start,
-                tested_range_end,
-                limit,
-            ),
-        )
+        cursor.execute(sql, params)
         rows = cursor.fetchall()
 
     return [_row_to_strategy_candidate(row) for row in rows]
@@ -180,8 +214,40 @@ def update_strategy_candidate_status(
 
     with conn.cursor() as cursor:
         cursor.execute(sql, (candidate_status, note, candidate_id))
-        
-        
+
+
+def update_strategy_candidate_validation_result(
+    conn: PgConnection,
+    *,
+    candidate_id: int,
+    validation_status: str,
+    validation_payload: dict[str, Any],
+) -> None:
+    """
+    功能：將 validation 結果寫回 candidate_status 與 note。
+    說明：
+        - v1 不改 schema
+        - validation 結果先序列化到 note
+    """
+    sql = """
+    UPDATE strategy_candidates
+    SET
+        candidate_status = %s,
+        note = %s
+    WHERE candidate_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                validation_status,
+                json.dumps(validation_payload, ensure_ascii=False, sort_keys=True),
+                candidate_id,
+            ),
+        )
+
+
 def get_strategy_candidate_by_id(
     conn: PgConnection,
     *,
