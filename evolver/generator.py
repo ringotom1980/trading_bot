@@ -1,6 +1,6 @@
 """
 Path: evolver/generator.py
-說明：Candidate Generator v5，從純 threshold 搜尋，升級為 threshold + weights 演化。
+說明：Candidate Generator v6，加入 candidate 去重 / 指紋化，減少等價候選與無效 mutation。
 """
 
 from __future__ import annotations
@@ -13,18 +13,18 @@ from strategy.signals import DEFAULT_WEIGHTS
 
 
 THRESHOLD_FIELD_SPECS: dict[str, tuple[list[float], int]] = {
-    "entry_threshold": ([-0.05, 0.0, 0.05], 4),
-    "exit_threshold": ([-0.05, 0.0, 0.05], 4),
-    "reverse_threshold": ([-0.05, 0.0, 0.05], 4),
-    "reverse_gap": ([-0.02, 0.0, 0.02], 4),
-    "hard_stop_loss_pct": ([-0.005, 0.0, 0.005], 4),
-    "take_profit_pct": ([-0.01, 0.0, 0.01], 4),
+    "entry_threshold": ([-0.05, 0.05], 4),
+    "exit_threshold": ([-0.05, 0.05], 4),
+    "reverse_threshold": ([-0.05, 0.05], 4),
+    "reverse_gap": ([-0.02, 0.02], 4),
+    "hard_stop_loss_pct": ([-0.005, 0.005], 4),
+    "take_profit_pct": ([-0.01, 0.01], 4),
 }
 
 INT_FIELD_SPECS: dict[str, list[int]] = {
-    "cooldown_bars": [-1, 0, 1],
-    "min_hold_bars": [-1, 0, 1],
-    "max_bars_hold": [-12, 0, 12],
+    "cooldown_bars": [-1, 1],
+    "min_hold_bars": [-1, 1],
+    "max_bars_hold": [-12, 12],
 }
 
 WEIGHT_MUTATION_TEMPLATES: list[dict[str, Any]] = [
@@ -212,10 +212,7 @@ def _resolve_base_weights(base_params: dict[str, Any]) -> dict[str, dict[str, fl
     if not isinstance(long_weights, dict) or not isinstance(short_weights, dict):
         return deepcopy(DEFAULT_WEIGHTS)
 
-    resolved = {
-        "long": {},
-        "short": {},
-    }
+    resolved = {"long": {}, "short": {}}
 
     for side in ("long", "short"):
         source = long_weights if side == "long" else short_weights
@@ -231,12 +228,64 @@ def _normalize_weight_map(weight_map: dict[str, float]) -> dict[str, float]:
 
     if total <= 0:
         equal_weight = 1.0 / len(cleaned)
-        return {key: equal_weight for key in cleaned}
+        return {key: _round_float(equal_weight, 6) for key in cleaned}
 
     return {
         key: _round_float(value / total, 6)
         for key, value in cleaned.items()
     }
+
+
+def _canonicalize_params(params: dict[str, Any]) -> dict[str, Any]:
+    """
+    功能：將 candidate 轉成穩定可比對的 canonical form。
+    說明：
+        - mutation_tag 不納入 fingerprint
+        - 浮點數做固定 round
+        - weights 做正規化後再 round
+    """
+    canonical = _copy_params(params)
+    canonical.pop("mutation_tag", None)
+
+    float_fields = [
+        "entry_threshold",
+        "exit_threshold",
+        "reverse_threshold",
+        "reverse_gap",
+        "hard_stop_loss_pct",
+        "take_profit_pct",
+        "fee_rate",
+        "slippage_rate",
+    ]
+    int_fields = [
+        "cooldown_bars",
+        "min_hold_bars",
+        "max_bars_hold",
+    ]
+
+    for key in float_fields:
+        if key in canonical:
+            canonical[key] = _round_float(float(canonical[key]), 6)
+
+    for key in int_fields:
+        if key in canonical:
+            canonical[key] = int(canonical[key])
+
+    weights = canonical.get("weights")
+    if isinstance(weights, dict):
+        normalized_weights: dict[str, dict[str, float]] = {}
+        for side in ("long", "short"):
+            side_weights = weights.get(side)
+            if isinstance(side_weights, dict):
+                normalized_weights[side] = _normalize_weight_map(side_weights)
+        canonical["weights"] = normalized_weights
+
+    return canonical
+
+
+def _build_candidate_fingerprint(params: dict[str, Any]) -> str:
+    canonical = _canonicalize_params(params)
+    return json.dumps(canonical, ensure_ascii=False, sort_keys=True)
 
 
 def _build_weight_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -280,7 +329,12 @@ def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any
         base_value = float(base_params.get(field, 0.0))
         for delta in deltas:
             params = _copy_params(base_params)
-            params[field] = _round_float(base_value + delta, digits)
+            new_value = _round_float(base_value + delta, digits)
+
+            if _round_float(new_value, 6) == _round_float(base_value, 6):
+                continue
+
+            params[field] = new_value
             params["mutation_tag"] = f"{field}:{delta:+}"
             variants.append(params)
 
@@ -288,12 +342,18 @@ def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any
         base_value = int(base_params.get(field, 0))
         for delta in deltas:
             params = _copy_params(base_params)
+
             if field == "cooldown_bars":
-                params[field] = _clamp_int(base_value + delta, 0, 12)
+                new_value = _clamp_int(base_value + delta, 0, 12)
             elif field == "min_hold_bars":
-                params[field] = _clamp_int(base_value + delta, 1, 48)
-            elif field == "max_bars_hold":
-                params[field] = _clamp_int(base_value + delta, 2, 240)
+                new_value = _clamp_int(base_value + delta, 1, 48)
+            else:
+                new_value = _clamp_int(base_value + delta, 2, 240)
+
+            if new_value == base_value:
+                continue
+
+            params[field] = new_value
             params["mutation_tag"] = f"{field}:{delta:+}"
             variants.append(params)
 
@@ -356,10 +416,10 @@ def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
     seen: set[str] = set()
 
     for params in candidates:
-        key = json.dumps(params, ensure_ascii=False, sort_keys=True)
-        if key in seen:
+        fingerprint = _build_candidate_fingerprint(params)
+        if fingerprint in seen:
             continue
-        seen.add(key)
+        seen.add(fingerprint)
         deduped.append(params)
 
     return deduped
@@ -370,12 +430,12 @@ def generate_param_candidates(
     base_params: dict[str, Any],
 ) -> list[dict[str, Any]]:
     """
-    功能：根據 base strategy 產生第五版候選參數組合。
+    功能：根據 base strategy 產生第六版候選參數組合。
     說明：
         - 保留 threshold 類微調
         - 新增 weights.long / weights.short 演化
-        - 不再用超大 product 暴力展開
-        - 改成較可控的 mutation pool
+        - 移除 +0.0 類無效 mutation
+        - 加入 fingerprint 去重
     """
     normalized_base = _apply_safe_defaults(base_params)
     normalized_base["weights"] = _build_weight_variants(normalized_base)[0]["weights"]
@@ -386,17 +446,17 @@ def generate_param_candidates(
     candidates: list[dict[str, Any]] = []
     candidates.append(normalized_base)
 
-    # 先放純權重變化
+    # 純權重變化
     for params in weight_variants[1:]:
         candidates.append(params)
 
-    # 再放純 threshold 變化
+    # 純 threshold 變化
     for params in threshold_variants:
         if "weights" not in params:
             params["weights"] = deepcopy(normalized_base["weights"])
         candidates.append(params)
 
-    # 最後放少量「threshold + weight」組合，讓搜尋真的進入演化層
+    # 少量 threshold + weight 組合
     selected_threshold_variants = threshold_variants[:12]
     selected_weight_variants = weight_variants[1:7]
 
@@ -404,11 +464,13 @@ def generate_param_candidates(
         for weight_params in selected_weight_variants:
             merged = _copy_params(threshold_params)
             merged["weights"] = deepcopy(weight_params["weights"])
-            merged["mutation_tag"] = (
-                f"{threshold_params.get('mutation_tag', 'threshold')}"
-                f"+{weight_params.get('mutation_tag', 'weight')}"
-            )
+
+            threshold_tag = threshold_params.get("mutation_tag", "threshold")
+            weight_tag = weight_params.get("mutation_tag", "weight")
+            merged["mutation_tag"] = f"{threshold_tag}+{weight_tag}"
+
             candidates.append(merged)
 
-    deduped = _dedupe_candidates(candidates)
-    return [params for params in deduped if _is_valid_candidate(params)]
+    valid_candidates = [params for params in candidates if _is_valid_candidate(params)]
+    deduped_candidates = _dedupe_candidates(valid_candidates)
+    return deduped_candidates
