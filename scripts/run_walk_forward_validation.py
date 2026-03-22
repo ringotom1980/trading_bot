@@ -37,6 +37,61 @@ def _parse_date_to_utc_start(date_text: str) -> datetime:
     return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
 
 
+def _build_walk_forward_fingerprint(summary: dict[str, object]) -> str:
+    payload = {
+        "final_status": str(summary.get("final_status") or ""),
+        "pass_windows": int(summary.get("pass_windows", 0) or 0),
+        "beat_active_windows": int(summary.get("beat_active_windows", 0) or 0),
+        "pass_ratio": round(float(summary.get("pass_ratio", 0.0) or 0.0), 4),
+        "avg_net_pnl": round(float(summary.get("avg_net_pnl", 0.0) or 0.0), 4),
+        "avg_profit_factor": round(float(summary.get("avg_profit_factor", 0.0) or 0.0), 4),
+        "avg_max_drawdown": round(float(summary.get("avg_max_drawdown", 0.0) or 0.0), 4),
+        "worst_window_drawdown": round(float(summary.get("worst_window_drawdown", 0.0) or 0.0), 4),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _dedupe_walk_forward_results(results: list[dict]) -> list[dict]:
+    best_by_fp: dict[str, dict] = {}
+
+    for row in results:
+        summary = dict(row.get("summary") or {})
+        fp = _build_walk_forward_fingerprint(summary)
+        wf_score = float(calculate_walk_forward_score(summary))
+        rank_score = float(row.get("rank_score", 0.0) or 0.0)
+
+        existing = best_by_fp.get(fp)
+        if existing is None:
+            copied = dict(row)
+            copied["_wf_score"] = wf_score
+            best_by_fp[fp] = copied
+            continue
+
+        existing_wf_score = float(existing.get("_wf_score", 0.0) or 0.0)
+        existing_rank_score = float(existing.get("rank_score", 0.0) or 0.0)
+
+        if wf_score > existing_wf_score:
+            copied = dict(row)
+            copied["_wf_score"] = wf_score
+            best_by_fp[fp] = copied
+            continue
+
+        if wf_score == existing_wf_score and rank_score > existing_rank_score:
+            copied = dict(row)
+            copied["_wf_score"] = wf_score
+            best_by_fp[fp] = copied
+
+    deduped = list(best_by_fp.values())
+    deduped.sort(
+        key=lambda item: (
+            float(item.get("_wf_score", 0.0) or 0.0),
+            float(item.get("rank_score", 0.0) or 0.0),
+        ),
+        reverse=True,
+    )
+    return deduped
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run walk-forward validation")
     parser.add_argument("--candidate-id", type=int, default=None, help="驗證單一 candidate")
@@ -132,11 +187,15 @@ def main() -> None:
                     run_id=run_id,
                     windows=list(result["windows"]),
                 )
+                
+        raw_result_count = len(results)
+        results = _dedupe_walk_forward_results(results)
 
     print("walk-forward validation 完成")
     print(f"validation_range_start={start_time.isoformat()}")
     print(f"validation_range_end={end_time.isoformat()}")
-    print(f"validated_count={len(results)}")
+    print(f"raw_validated_count={raw_result_count}")
+    print(f"deduped_validated_count={len(results)}")
     print(f"window_days={int(args.window_days)}")
     print(f"step_days={int(args.step_days)}")
     print("")
@@ -160,6 +219,8 @@ def main() -> None:
         print(f"worst_window_drawdown={float(summary.get('worst_window_drawdown', 0.0)):.8f}")
         print(f"final_status={summary.get('final_status')}")
         print(f"wf_score={wf_score:.8f}")
+        if summary.get("final_reasons"):
+            print("final_reasons=" + json.dumps(summary["final_reasons"], ensure_ascii=False))
         print("summary=" + json.dumps(summary, ensure_ascii=False, sort_keys=True))
         print("")
 
@@ -181,8 +242,6 @@ def main() -> None:
             if window.get("reasons"):
                 print("  reasons=" + json.dumps(window["reasons"], ensure_ascii=False))
             print("")
-            if summary.get("final_reasons"):
-                print("  final_reasons=" + json.dumps(summary["final_reasons"], ensure_ascii=False))
 
 
 if __name__ == "__main__":
