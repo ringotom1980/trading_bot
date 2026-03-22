@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 
+import requests
 from psycopg2.extensions import connection as PgConnection
 
 from config.settings import Settings
@@ -377,6 +378,37 @@ def create_live_entry_flow(
             reduce_only=False,
             new_client_order_id=client_order_id,
         )
+    except requests.HTTPError as exc:
+        response_text = ""
+        if exc.response is not None:
+            response_text = exc.response.text
+
+        create_system_event(
+            conn,
+            event_type="ERROR",
+            event_level="ERROR",
+            source="SYSTEM",
+            message=f"LIVE 開倉失敗：{exc}",
+            details={
+                "decision_id": decision_id,
+                "decision": decision,
+                "symbol": settings.primary_symbol,
+                "qty": qty,
+                "http_response_text": response_text,
+            },
+            created_by="live_executor_entry_flow",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+        return None, None, None, f"LIVE 開倉失敗：{exc} | response={response_text}"
     except Exception as exc:
         create_system_event(
             conn,
@@ -603,6 +635,37 @@ def create_live_exit_flow(
             quantity=qty,
             new_client_order_id=client_order_id,
         )
+    except requests.HTTPError as exc:
+        response_text = ""
+        if exc.response is not None:
+            response_text = exc.response.text
+
+        create_system_event(
+            conn,
+            event_type="ERROR",
+            event_level="ERROR",
+            source="SYSTEM",
+            message=f"LIVE 平倉失敗：{exc}",
+            details={
+                "decision_id": decision_id,
+                "symbol": settings.primary_symbol,
+                "position_id": int(open_position["position_id"]),
+                "qty": qty,
+                "http_response_text": response_text,
+            },
+            created_by="live_executor_exit_flow",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+        return None, None, None, f"LIVE 平倉失敗：{exc} | response={response_text}"
     except Exception as exc:
         create_system_event(
             conn,
