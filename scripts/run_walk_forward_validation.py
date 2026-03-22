@@ -15,6 +15,7 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from evolver.promoter import calculate_walk_forward_score
 from evolver.walk_forward import run_walk_forward_for_candidate
 from storage.db import connection_scope
 from storage.repositories.candidate_walk_forward_repo import (
@@ -142,6 +143,7 @@ def main() -> None:
 
     for idx, result in enumerate(results, start=1):
         summary = dict(result["summary"])
+        wf_score = calculate_walk_forward_score(summary)
 
         print(f"===== WALK FORWARD {idx} =====")
         print(f"candidate_id={result['candidate_id']}")
@@ -157,6 +159,7 @@ def main() -> None:
         print(f"worst_window_net_pnl={float(summary.get('worst_window_net_pnl', 0.0)):.8f}")
         print(f"worst_window_drawdown={float(summary.get('worst_window_drawdown', 0.0)):.8f}")
         print(f"final_status={summary.get('final_status')}")
+        print(f"wf_score={wf_score:.8f}")
         print("summary=" + json.dumps(summary, ensure_ascii=False, sort_keys=True))
         print("")
 
@@ -178,6 +181,8 @@ def main() -> None:
             if window.get("reasons"):
                 print("  reasons=" + json.dumps(window["reasons"], ensure_ascii=False))
             print("")
+            if summary.get("final_reasons"):
+                print("  final_reasons=" + json.dumps(summary["final_reasons"], ensure_ascii=False))
 
 
 if __name__ == "__main__":
