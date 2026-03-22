@@ -5,6 +5,7 @@ Path: strategy/features.py
 
 from __future__ import annotations
 
+from datetime import datetime
 from math import sqrt
 from statistics import mean
 from typing import Any
@@ -112,6 +113,19 @@ def _avg_range_pct(klines: list[dict[str, Any]], window: int) -> float:
     return mean(values)
 
 
+def _to_bar_close_time_value(value: Any) -> int:
+    """
+    功能：將 close_time 統一轉為毫秒時間戳整數。
+    說明：
+        - runtime 即時抓 Binance 時，close_time 是毫秒整數
+        - backtest 從 DB 讀 historical_klines 時，close_time 是 datetime
+    """
+    if isinstance(value, datetime):
+        return int(value.timestamp() * 1000)
+
+    return int(value)
+
+
 def calculate_feature_pack(symbol: str, interval: str, klines: list[dict[str, Any]]) -> dict[str, Any]:
     """
     功能：依 K 線資料計算 Feature Pool v1。
@@ -198,7 +212,7 @@ def calculate_feature_pack(symbol: str, interval: str, klines: list[dict[str, An
     return {
         "symbol": symbol,
         "interval": interval,
-        "bar_close_time": int(latest["close_time"]),
+        "bar_close_time": _to_bar_close_time_value(latest["close_time"]),
 
         "close_vs_sma5_pct": close_vs_sma5_pct,
         "close_vs_sma10_pct": close_vs_sma10_pct,
