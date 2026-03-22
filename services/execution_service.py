@@ -94,6 +94,7 @@ def build_decision_context(
     settings: Settings,
     client: BinanceClient,
     current_position_side: str | None,
+    strategy_params: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """
     功能：抓取市場資料並計算 feature、signal 與 decision。
@@ -111,12 +112,13 @@ def build_decision_context(
         klines=klines,
     )
 
-    signal_scores = calculate_signal_scores(feature_pack)
-
+    signal_scores = calculate_signal_scores(feature_pack, strategy_params)
+    
     decision_result = calculate_decision(
         long_score=signal_scores["long_score"],
         short_score=signal_scores["short_score"],
         current_position_side=current_position_side,
+        params=strategy_params,
     )
 
     return {
@@ -229,6 +231,7 @@ def record_runtime_decision(
         settings=settings,
         client=client,
         current_position_side=system_state["current_position_side"],
+        strategy_params=dict(active_strategy["params_json"] or {}),
     )
 
     latest_kline = context["klines"][-1]

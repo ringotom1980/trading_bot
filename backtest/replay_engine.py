@@ -83,13 +83,15 @@ def run_backtest_replay(
             klines=window[-60:],
         )
 
-        signal_scores = calculate_signal_scores(feature_pack)
+        signal_scores = calculate_signal_scores(feature_pack, params)
+
 
         decision_result = calculate_decision(
             long_score=signal_scores["long_score"],
             short_score=signal_scores["short_score"],
             current_position_side=current_position["side"] if current_position else None,
-        )
+            params=params,
+)
 
         decisions.append(
             {
