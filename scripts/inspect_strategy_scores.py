@@ -5,6 +5,15 @@ Path: scripts/inspect_strategy_scores.py
 """
 
 from __future__ import annotations
+from strategy.signals import calculate_signal_scores
+from strategy.features import calculate_feature_pack
+from strategy.decision import build_decision_result
+from storage.db import connection_scope, test_connection
+from services.strategy_service import load_active_strategy
+from exchange.market_data import get_latest_klines
+from exchange.binance_client import BinanceClient
+from config.settings import load_settings
+from config.logging import setup_logging
 
 import sys
 from datetime import datetime
@@ -15,16 +24,6 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from config.logging import setup_logging
-from config.settings import load_settings
-from exchange.binance_client import BinanceClient
-from exchange.market_data import get_latest_klines
-from services.strategy_service import load_active_strategy
-from storage.db import connection_scope, test_connection
-from strategy.decision import calculate_decision
-from strategy.features import calculate_feature_pack
-from strategy.signals import calculate_signal_scores
-
 
 def _ms_to_local_str(ms: int) -> str:
     """
@@ -34,11 +33,120 @@ def _ms_to_local_str(ms: int) -> str:
     return dt.strftime("%Y-%m-%d %H:%M:%S")
 
 
+def _calculate_decision_with_params(
+    *,
+    long_score: float,
+    short_score: float,
+    current_position_side: str | None,
+    entry_threshold: float,
+    exit_threshold: float,
+    reverse_threshold: float,
+    reverse_gap: float,
+) -> dict[str, Any]:
+    """
+    功能：使用 ACTIVE strategy 的 params_json 門檻，模擬 runtime 真正 decision 邏輯。
+    """
+    if current_position_side is None:
+        if long_score >= entry_threshold and long_score > short_score + reverse_gap:
+            return build_decision_result(
+                decision="ENTER_LONG",
+                decision_score=long_score,
+                reason_code="ENTRY_SIGNAL",
+                reason_summary="無持倉，long_score 達進場門檻且明顯強於 short_score",
+                long_score=long_score,
+                short_score=short_score,
+            )
+
+        if short_score >= entry_threshold and short_score > long_score + reverse_gap:
+            return build_decision_result(
+                decision="ENTER_SHORT",
+                decision_score=short_score,
+                reason_code="ENTRY_SIGNAL",
+                reason_summary="無持倉，short_score 達進場門檻且明顯強於 long_score",
+                long_score=long_score,
+                short_score=short_score,
+            )
+
+        return build_decision_result(
+            decision="WAIT",
+            decision_score=max(long_score, short_score),
+            reason_code="NO_SIGNAL",
+            reason_summary="無持倉，但雙分數未達有效進場條件",
+            long_score=long_score,
+            short_score=short_score,
+        )
+
+    if current_position_side == "LONG":
+        if short_score >= reverse_threshold and short_score > long_score + reverse_gap:
+            return build_decision_result(
+                decision="EXIT",
+                decision_score=short_score,
+                reason_code="REVERSE_SIGNAL",
+                reason_summary="目前持有 LONG，但 short_score 達反向門檻，先退出等待下一輪反向",
+                long_score=long_score,
+                short_score=short_score,
+            )
+
+        if long_score < exit_threshold:
+            return build_decision_result(
+                decision="EXIT",
+                decision_score=long_score,
+                reason_code="EXIT_SIGNAL",
+                reason_summary="目前持有 LONG，但 long_score 已跌破出場門檻",
+                long_score=long_score,
+                short_score=short_score,
+            )
+
+        return build_decision_result(
+            decision="HOLD",
+            decision_score=long_score,
+            reason_code="NO_SIGNAL",
+            reason_summary="目前持有 LONG，long_score 仍具支撐，維持持倉",
+            long_score=long_score,
+            short_score=short_score,
+        )
+
+    if current_position_side == "SHORT":
+        if long_score >= reverse_threshold and long_score > short_score + reverse_gap:
+            return build_decision_result(
+                decision="EXIT",
+                decision_score=long_score,
+                reason_code="REVERSE_SIGNAL",
+                reason_summary="目前持有 SHORT，但 long_score 達反向門檻，先退出等待下一輪反向",
+                long_score=long_score,
+                short_score=short_score,
+            )
+
+        if short_score < exit_threshold:
+            return build_decision_result(
+                decision="EXIT",
+                decision_score=short_score,
+                reason_code="EXIT_SIGNAL",
+                reason_summary="目前持有 SHORT，但 short_score 已跌破出場門檻",
+                long_score=long_score,
+                short_score=short_score,
+            )
+
+        return build_decision_result(
+            decision="HOLD",
+            decision_score=short_score,
+            reason_code="NO_SIGNAL",
+            reason_summary="目前持有 SHORT，short_score 仍具支撐，維持持倉",
+            long_score=long_score,
+            short_score=short_score,
+        )
+
+    raise ValueError(f"不支援的持倉方向：{current_position_side}")
+
+
 def _build_row(
     *,
     klines_window: list[dict[str, Any]],
     current_position_side: str | None,
     entry_threshold: float,
+    exit_threshold: float,
+    reverse_threshold: float,
+    reverse_gap: float,
 ) -> dict[str, Any]:
     """
     功能：對單一 bar 視窗計算 feature / signal / decision。
@@ -50,10 +158,14 @@ def _build_row(
     )
 
     signal_scores = calculate_signal_scores(feature_pack)
-    decision_result = calculate_decision(
+    decision_result = _calculate_decision_with_params(
         long_score=signal_scores["long_score"],
         short_score=signal_scores["short_score"],
         current_position_side=current_position_side,
+        entry_threshold=entry_threshold,
+        exit_threshold=exit_threshold,
+        reverse_threshold=reverse_threshold,
+        reverse_gap=reverse_gap,
     )
 
     latest = klines_window[-1]
@@ -91,7 +203,8 @@ def _print_table(rows: list[dict[str, Any]]) -> None:
     for header in headers:
         widths[header] = max(
             len(header),
-            *(len(f"{row[header]:.6f}") if isinstance(row[header], float) else len(str(row[header])) for row in rows),
+            *(len(f"{row[header]:.6f}") if isinstance(row[header],
+              float) else len(str(row[header])) for row in rows),
         )
 
     def _fmt_value(header: str, value: Any) -> str:
@@ -99,14 +212,16 @@ def _print_table(rows: list[dict[str, Any]]) -> None:
             return f"{value:.6f}".rjust(widths[header])
         return str(value).ljust(widths[header])
 
-    header_line = " | ".join(header.ljust(widths[header]) for header in headers)
+    header_line = " | ".join(header.ljust(
+        widths[header]) for header in headers)
     split_line = "-+-".join("-" * widths[header] for header in headers)
 
     print(header_line)
     print(split_line)
 
     for row in rows:
-        print(" | ".join(_fmt_value(header, row[header]) for header in headers))
+        print(" | ".join(_fmt_value(
+            header, row[header]) for header in headers))
 
 
 def main() -> None:
@@ -138,6 +253,9 @@ def main() -> None:
 
     params = active_strategy["params_json"]
     entry_threshold = float(params.get("entry_threshold", 0.0))
+    exit_threshold = float(params.get("exit_threshold", 0.0))
+    reverse_threshold = float(params.get("reverse_threshold", 0.0))
+    reverse_gap = float(params.get("reverse_gap", 0.0))
 
     need_klines = 60 + bars - 1
     klines = get_latest_klines(
@@ -155,6 +273,9 @@ def main() -> None:
             klines_window=window,
             current_position_side=None,
             entry_threshold=entry_threshold,
+            exit_threshold=exit_threshold,
+            reverse_threshold=reverse_threshold,
+            reverse_gap=reverse_gap,
         )
         rows.append(row)
 
