@@ -85,11 +85,13 @@ def _validate_one_candidate(
     )
 
     validation_status = "VALIDATED_PASS" if passed else "VALIDATED_FAIL"
+    db_candidate_status = "APPROVED" if passed else "REJECTED"
 
     validation_payload = {
         "validation_range_start": start_time.isoformat(),
         "validation_range_end": end_time.isoformat(),
         "validation_status": validation_status,
+        "db_candidate_status": db_candidate_status,
         "validation_metrics": metrics,
         "validation_reasons": reasons,
     }

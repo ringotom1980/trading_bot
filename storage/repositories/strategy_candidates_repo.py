@@ -227,8 +227,11 @@ def update_strategy_candidate_validation_result(
     功能：將 validation 結果寫回 candidate_status 與 note。
     說明：
         - v1 不改 schema
-        - validation 結果先序列化到 note
+        - validation 結果序列化到 note
+        - candidate_status 只使用既有允許值
     """
+    mapped_status = "APPROVED" if validation_status == "VALIDATED_PASS" else "REJECTED"
+
     sql = """
     UPDATE strategy_candidates
     SET
@@ -241,7 +244,7 @@ def update_strategy_candidate_validation_result(
         cursor.execute(
             sql,
             (
-                validation_status,
+                mapped_status,
                 json.dumps(validation_payload, ensure_ascii=False, sort_keys=True),
                 candidate_id,
             ),
