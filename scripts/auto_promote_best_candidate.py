@@ -319,3 +319,6 @@ def main() -> None:
     print(f"new_strategy_version_id={new_strategy_version_id}")
     print(f"new_version_code={new_version_code}")
     print("validation_metrics=" + json.dumps(selected_validation_metrics, ensure_ascii=False, sort_keys=True))
+    
+if __name__ == "__main__":
+    main()
