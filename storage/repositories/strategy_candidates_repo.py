@@ -28,6 +28,46 @@ def _row_to_strategy_candidate(row: tuple[Any, ...]) -> dict[str, Any]:
         "note": row[11],
         "created_at": row[12],
     }
+    
+    
+def delete_strategy_candidates_for_range(
+    conn: PgConnection,
+    *,
+    source_strategy_version_id: int,
+    symbol: str,
+    interval: str,
+    tested_range_start: datetime,
+    tested_range_end: datetime,
+) -> int:
+    """
+    功能：刪除同一來源版本 / 同一商品 / 同一週期 / 同一測試區間的舊 candidate。
+    回傳：
+        刪除筆數
+    """
+    sql = """
+    DELETE FROM strategy_candidates
+    WHERE source_strategy_version_id = %s
+      AND symbol = %s
+      AND interval = %s
+      AND tested_range_start = %s
+      AND tested_range_end = %s
+    RETURNING candidate_id
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                source_strategy_version_id,
+                symbol,
+                interval,
+                tested_range_start,
+                tested_range_end,
+            ),
+        )
+        rows = cursor.fetchall()
+
+    return len(rows)
 
 
 def upsert_strategy_candidate(

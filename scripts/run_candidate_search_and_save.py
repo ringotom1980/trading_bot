@@ -25,6 +25,7 @@ from evolver.scorer import calculate_candidate_score
 from storage.db import get_connection, connection_scope
 from storage.repositories.historical_klines_repo import get_historical_klines_by_range
 from storage.repositories.strategy_candidates_repo import (
+    delete_strategy_candidates_for_range,
     get_top_strategy_candidates,
     upsert_strategy_candidate,
 )
@@ -105,6 +106,20 @@ def _dedupe_results_by_behavior(results: list[dict[str, object]]) -> list[dict[s
     deduped = list(best_by_fp.values())
     deduped.sort(key=lambda item: (float(item["rank_score"]), -int(item["candidate_no"])), reverse=True)
     return deduped
+
+
+def _renumber_results(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    """
+    功能：將 deduped 後的 candidate 重新編號，避免 candidate_no 斷裂。
+    """
+    renumbered: list[dict[str, object]] = []
+
+    for idx, row in enumerate(results, start=1):
+        copied = dict(row)
+        copied["candidate_no"] = idx
+        renumbered.append(copied)
+
+    return renumbered
 
 
 def main() -> None:
@@ -213,13 +228,24 @@ def main() -> None:
 
     deduped_results = _dedupe_results_by_behavior(raw_results)
     deduped_results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
+    deduped_results = _renumber_results(deduped_results)
 
     conn = get_connection()
     saved_count = 0
+    deleted_count = 0
     top_rows: list[dict[str, object]] = []
 
     try:
-        for idx, row in enumerate(deduped_results, start=1):
+        deleted_count = delete_strategy_candidates_for_range(
+            conn,
+            source_strategy_version_id=int(strategy["strategy_version_id"]),
+            symbol=symbol,
+            interval=interval,
+            tested_range_start=start_time,
+            tested_range_end=end_time,
+        )
+
+        for row in deduped_results:
             upsert_strategy_candidate(
                 conn,
                 source_strategy_version_id=int(strategy["strategy_version_id"]),
@@ -227,11 +253,11 @@ def main() -> None:
                 interval=interval,
                 tested_range_start=start_time,
                 tested_range_end=end_time,
-                candidate_no=idx,
+                candidate_no=int(row["candidate_no"]),
                 params=dict(row["params"]),
                 metrics=dict(row["metrics"]),
                 rank_score=float(row["rank_score"]),
-                note="candidate search v4 - behavior dedupe",
+                note="candidate search v5 - behavior dedupe with replace",
             )
             saved_count += 1
 
@@ -264,6 +290,7 @@ def main() -> None:
                 "tested_range_end": end_time.isoformat(),
                 "raw_candidate_count": len(raw_results),
                 "deduped_candidate_count": len(deduped_results),
+                "deleted_count": deleted_count,
                 "saved_count": saved_count,
                 "top_candidate_id": int(top_rows[0]["candidate_id"]) if top_rows else None,
                 "top_rank_score": float(top_rows[0]["rank_score"]) if top_rows else None,
@@ -298,6 +325,7 @@ def main() -> None:
     print(f"kline_count={len(klines)}")
     print(f"raw_candidate_count={len(raw_results)}")
     print(f"deduped_candidate_count={len(deduped_results)}")
+    print(f"deleted_count={deleted_count}")
     print(f"saved_count={saved_count}")
     print(f"elapsed={_format_elapsed(time.time() - started_at)}")
     print("")
