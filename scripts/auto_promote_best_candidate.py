@@ -10,6 +10,7 @@ from pathlib import Path
 import argparse
 import json
 import sys
+from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -41,6 +42,26 @@ def _parse_date_to_utc_start(date_text: str) -> datetime:
 def _build_version_code(base_version_code: str, candidate_id: int) -> str:
     stamp = datetime.now(tz=timezone.utc).strftime("%Y%m%d%H%M%S")
     return f"{base_version_code}_ev_{candidate_id}_{stamp}"
+
+
+def _normalize_for_compare(value: Any) -> Any:
+    """
+    功能：將 params 結構正規化，方便做穩定比對。
+    """
+    if isinstance(value, dict):
+        return {k: _normalize_for_compare(value[k]) for k in sorted(value.keys())}
+
+    if isinstance(value, list):
+        return [_normalize_for_compare(item) for item in value]
+
+    return value
+
+
+def _params_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
+    """
+    功能：比較兩組 params 是否完全相同。
+    """
+    return _normalize_for_compare(left) == _normalize_for_compare(right)
 
 
 def main() -> None:
@@ -136,6 +157,41 @@ def main() -> None:
         best_candidate_id = int(best_candidate["candidate_id"])
         metrics = dict(best_candidate["metrics_json"] or {})
         params = dict(best_candidate["params_json"] or {})
+        active_params = dict(active_strategy["params_json"] or {})
+
+        if _params_equal(params, active_params):
+            update_strategy_candidate_status(
+                conn,
+                candidate_id=best_candidate_id,
+                candidate_status="REJECTED",
+                note="candidate params 與目前 ACTIVE 相同",
+            )
+
+            create_system_event(
+                conn,
+                event_type="GUARD_TRIGGERED",
+                event_level="INFO",
+                source="SYSTEM",
+                message="auto promote 中止：candidate params 與目前 ACTIVE 相同",
+                details={
+                    "candidate_id": best_candidate_id,
+                    "active_strategy_version_id": active_strategy_version_id,
+                },
+                created_by="auto_promote_best_candidate",
+                engine_mode_before=system_state["engine_mode"],
+                engine_mode_after=system_state["engine_mode"],
+                trade_mode_before=system_state["trade_mode"],
+                trade_mode_after=system_state["trade_mode"],
+                trading_state_before=system_state["trading_state"],
+                trading_state_after=system_state["trading_state"],
+                live_armed_before=system_state["live_armed"],
+                live_armed_after=system_state["live_armed"],
+                strategy_version_before=active_strategy_version_id,
+                strategy_version_after=active_strategy_version_id,
+            )
+
+            print("auto promote 中止：candidate params 與目前 ACTIVE 相同")
+            return
 
         passed, reasons = check_promotion_gate(metrics)
 
