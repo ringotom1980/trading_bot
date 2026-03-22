@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import sys
+import time
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -20,7 +21,7 @@ from backtest.replay_engine import run_backtest_replay
 from config.settings import load_settings
 from evolver.generator import generate_param_candidates
 from evolver.scorer import calculate_candidate_score
-from storage.db import connection_scope
+from storage.db import get_connection, connection_scope
 from storage.repositories.historical_klines_repo import get_historical_klines_by_range
 from storage.repositories.strategy_candidates_repo import (
     get_top_strategy_candidates,
@@ -38,15 +39,33 @@ def _parse_date_to_utc_start(date_text: str) -> datetime:
     return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
 
 
+def _format_elapsed(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    remain = int(seconds % 60)
+    return f"{minutes:02d}:{remain:02d}"
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run candidate search and save v1")
+    parser = argparse.ArgumentParser(description="Run candidate search and save v2")
     parser.add_argument("--symbol", type=str, default=None)
     parser.add_argument("--interval", type=str, default=None)
     parser.add_argument("--start-date", type=str, required=True)
     parser.add_argument("--end-date", type=str, required=True)
     parser.add_argument("--version-code", type=str, default=None)
     parser.add_argument("--top", type=int, default=10)
+    parser.add_argument("--max-candidates", type=int, default=100, help="最多跑幾組 candidate，預設 100")
+    parser.add_argument("--progress-step", type=int, default=10, help="每幾組印一次進度，預設 10")
+    parser.add_argument("--commit-step", type=int, default=20, help="每幾組 commit 一次，預設 20")
     args = parser.parse_args()
+
+    if args.max_candidates <= 0:
+        raise ValueError("--max-candidates 必須大於 0")
+
+    if args.progress_step <= 0:
+        raise ValueError("--progress-step 必須大於 0")
+
+    if args.commit_step <= 0:
+        raise ValueError("--commit-step 必須大於 0")
 
     settings = load_settings()
     symbol = args.symbol or settings.primary_symbol
@@ -79,11 +98,27 @@ def main() -> None:
         raise RuntimeError(f"歷史 K 線不足，got={len(klines)}")
 
     base_params = dict(strategy["params_json"] or {})
-    candidates = generate_param_candidates(base_params=base_params)
+    all_candidates = generate_param_candidates(base_params=base_params)
+    candidates = all_candidates[: args.max_candidates]
 
+    print("candidate search and save 開始")
+    print(f"symbol={symbol}")
+    print(f"interval={interval}")
+    print(f"version_code={strategy['version_code']}")
+    print(f"range_start={start_time.isoformat()}")
+    print(f"range_end={end_time.isoformat()}")
+    print(f"kline_count={len(klines)}")
+    print(f"all_candidate_count={len(all_candidates)}")
+    print(f"run_candidate_count={len(candidates)}")
+    print("")
+
+    started_at = time.time()
     saved_count = 0
 
-    with connection_scope() as conn:
+    conn = get_connection()
+    top_rows: list[dict[str, object]] = []
+
+    try:
         for idx, candidate_params in enumerate(candidates, start=1):
             replay_result = run_backtest_replay(
                 klines=klines,
@@ -111,9 +146,24 @@ def main() -> None:
                 params=candidate_params,
                 metrics=metrics,
                 rank_score=rank_score,
-                note="candidate search v1",
+                note="candidate search v2",
             )
             saved_count += 1
+
+            if idx % args.commit_step == 0:
+                conn.commit()
+
+            if idx % args.progress_step == 0 or idx == len(candidates):
+                elapsed = _format_elapsed(time.time() - started_at)
+                print(
+                    f"[progress] {idx}/{len(candidates)} "
+                    f"saved={saved_count} "
+                    f"elapsed={elapsed} "
+                    f"latest_score={rank_score:.8f} "
+                    f"latest_net_pnl={float(metrics['net_pnl']):.8f}"
+                )
+
+        conn.commit()
 
         top_rows = get_top_strategy_candidates(
             conn,
@@ -124,7 +174,7 @@ def main() -> None:
             tested_range_end=end_time,
             limit=args.top,
         )
-        
+
         create_system_event(
             conn,
             event_type="MANUAL_ACTION",
@@ -154,8 +204,16 @@ def main() -> None:
             strategy_version_before=int(strategy["strategy_version_id"]),
             strategy_version_after=int(strategy["strategy_version_id"]),
         )
+        conn.commit()
 
-    print("candidate search and save v1 完成")
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+    print("")
+    print("candidate search and save v2 完成")
     print(f"symbol={symbol}")
     print(f"interval={interval}")
     print(f"version_code={strategy['version_code']}")
@@ -164,6 +222,7 @@ def main() -> None:
     print(f"kline_count={len(klines)}")
     print(f"candidate_count={len(candidates)}")
     print(f"saved_count={saved_count}")
+    print(f"elapsed={_format_elapsed(time.time() - started_at)}")
     print("")
 
     for idx, row in enumerate(top_rows, start=1):

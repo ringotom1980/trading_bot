@@ -1,6 +1,6 @@
 """
 Path: scripts/run_candidate_search.py
-說明：Candidate Search v1，從 ACTIVE strategy 產生候選參數組合，逐一跑 backtest 並排序輸出前幾名。
+說明：Candidate Search v2，從 ACTIVE strategy 產生候選參數組合，逐一跑 backtest 並排序輸出前幾名。
 """
 
 from __future__ import annotations
@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 import json
 import sys
+import time
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -33,15 +34,29 @@ def _parse_date_to_utc_start(date_text: str) -> datetime:
     return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
 
 
+def _format_elapsed(seconds: float) -> str:
+    minutes = int(seconds // 60)
+    remain = int(seconds % 60)
+    return f"{minutes:02d}:{remain:02d}"
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run candidate search v1")
+    parser = argparse.ArgumentParser(description="Run candidate search v2")
     parser.add_argument("--symbol", type=str, default=None, help="例如 BTCUSDT")
     parser.add_argument("--interval", type=str, default=None, help="例如 15m")
     parser.add_argument("--start-date", type=str, required=True, help="YYYY-MM-DD")
     parser.add_argument("--end-date", type=str, required=True, help="YYYY-MM-DD，不含當日")
     parser.add_argument("--version-code", type=str, default=None, help="不帶則使用 ACTIVE")
     parser.add_argument("--top", type=int, default=10, help="顯示前幾名，預設 10")
+    parser.add_argument("--max-candidates", type=int, default=100, help="最多跑幾組 candidate，預設 100")
+    parser.add_argument("--progress-step", type=int, default=10, help="每幾組印一次進度，預設 10")
     args = parser.parse_args()
+
+    if args.max_candidates <= 0:
+        raise ValueError("--max-candidates 必須大於 0")
+
+    if args.progress_step <= 0:
+        raise ValueError("--progress-step 必須大於 0")
 
     settings = load_settings()
     symbol = args.symbol or settings.primary_symbol
@@ -74,8 +89,21 @@ def main() -> None:
         raise RuntimeError(f"歷史 K 線不足，got={len(klines)}")
 
     base_params = dict(strategy["params_json"] or {})
-    candidates = generate_param_candidates(base_params=base_params)
+    all_candidates = generate_param_candidates(base_params=base_params)
+    candidates = all_candidates[: args.max_candidates]
 
+    print("candidate search 開始")
+    print(f"symbol={symbol}")
+    print(f"interval={interval}")
+    print(f"version_code={strategy['version_code']}")
+    print(f"range_start={start_time.isoformat()}")
+    print(f"range_end={end_time.isoformat()}")
+    print(f"kline_count={len(klines)}")
+    print(f"all_candidate_count={len(all_candidates)}")
+    print(f"run_candidate_count={len(candidates)}")
+    print("")
+
+    started_at = time.time()
     results: list[dict[str, object]] = []
 
     for idx, candidate_params in enumerate(candidates, start=1):
@@ -102,9 +130,19 @@ def main() -> None:
         }
         results.append(row)
 
+        if idx % args.progress_step == 0 or idx == len(candidates):
+            elapsed = _format_elapsed(time.time() - started_at)
+            print(
+                f"[progress] {idx}/{len(candidates)} "
+                f"elapsed={elapsed} "
+                f"latest_score={score:.8f} "
+                f"latest_net_pnl={float(metrics['net_pnl']):.8f}"
+            )
+
     results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
 
-    print("candidate search v1 完成")
+    print("")
+    print("candidate search v2 完成")
     print(f"symbol={symbol}")
     print(f"interval={interval}")
     print(f"version_code={strategy['version_code']}")
@@ -112,6 +150,7 @@ def main() -> None:
     print(f"range_end={end_time.isoformat()}")
     print(f"kline_count={len(klines)}")
     print(f"candidate_count={len(results)}")
+    print(f"elapsed={_format_elapsed(time.time() - started_at)}")
     print("")
 
     top_n = min(args.top, len(results))
