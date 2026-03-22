@@ -9,6 +9,7 @@ from config.logging import get_logger, setup_logging
 from config.settings import load_settings
 from core.runtime import run_runtime_loop
 from services.strategy_service import load_active_strategy
+from services.reconciliation_service import reconcile_startup_state
 from storage.db import connection_scope, test_connection
 from storage.repositories.system_state_repo import get_system_state
 
@@ -50,14 +51,22 @@ def main() -> None:
         logger.info("DB_TRADE_MODE=%s", system_state["trade_mode"])
         logger.info("DB_TRADING_STATE=%s", system_state["trading_state"])
         logger.info("DB_LIVE_ARMED=%s", system_state["live_armed"])
-        logger.info("DB_ACTIVE_STRATEGY_VERSION_ID=%s", system_state["active_strategy_version_id"])
+        logger.info("DB_ACTIVE_STRATEGY_VERSION_ID=%s",
+                    system_state["active_strategy_version_id"])
 
-        logger.info("ACTIVE_STRATEGY_ID=%s", active_strategy["strategy_version_id"])
+        logger.info("ACTIVE_STRATEGY_ID=%s",
+                    active_strategy["strategy_version_id"])
         logger.info("ACTIVE_VERSION_CODE=%s", active_strategy["version_code"])
         logger.info("ACTIVE_STATUS=%s", active_strategy["status"])
         logger.info("ACTIVE_SOURCE_TYPE=%s", active_strategy["source_type"])
         logger.info("ACTIVE_SYMBOL=%s", active_strategy["symbol"])
         logger.info("ACTIVE_INTERVAL=%s", active_strategy["interval"])
+
+        reconcile_startup_state(
+            conn,
+            settings=settings,
+            system_state=system_state,
+        )
 
         run_runtime_loop(
             conn,

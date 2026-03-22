@@ -208,9 +208,29 @@ class BinanceClient:
         params: dict[str, Any] = {
             "symbol": symbol,
             "limit": limit,
-    }
+        }
 
         if order_id is not None:
             params["orderId"] = order_id
 
         return self.get_signed("/fapi/v1/userTrades", params=params, timeout=timeout)
+
+    def get_position_risk(
+        self,
+        *,
+        symbol: str | None = None,
+        timeout: int = 10,
+    ) -> Any:
+        """
+        功能：查詢 Binance Futures 持倉風險資料。
+        參數：
+            symbol: 交易標的；若提供則只查該標的。
+            timeout: 逾時秒數。
+        回傳：
+            持倉資料列表。
+        """
+        params: dict[str, Any] = {}
+        if symbol:
+            params["symbol"] = symbol
+
+        return self.get_signed("/fapi/v3/positionRisk", params=params, timeout=timeout)
