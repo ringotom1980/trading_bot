@@ -1,6 +1,6 @@
 """
 Path: scripts/run_candidate_search.py
-說明：Candidate Search v2，從 ACTIVE strategy 產生候選參數組合，逐一跑 backtest 並排序輸出前幾名。
+說明：Candidate Search v3，從 ACTIVE strategy 產生候選參數組合，逐一跑 backtest、做行為去重並排序輸出前幾名。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from pathlib import Path
 import json
 import sys
 import time
+from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -30,8 +31,7 @@ from storage.repositories.strategy_versions_repo import (
 
 
 def _format_weight_summary(weights: dict[str, float], top_n: int = 3) -> str:
-    ordered = sorted(
-        weights.items(), key=lambda item: float(item[1]), reverse=True)
+    ordered = sorted(weights.items(), key=lambda item: float(item[1]), reverse=True)
     top_items = ordered[:top_n]
     return ", ".join(f"{key}={float(value):.4f}" for key, value in top_items)
 
@@ -64,21 +64,63 @@ def _format_elapsed(seconds: float) -> str:
     return f"{minutes:02d}:{remain:02d}"
 
 
+def _build_behavior_fingerprint(metrics: dict[str, Any]) -> str:
+    """
+    功能：建立 candidate 行為指紋，用於去除回測結果幾乎相同的候選。
+    說明：
+        - total_trades 直接取整數
+        - 其餘數值做適度 round，避免極小數差異造成無效分裂
+    """
+    payload = {
+        "total_trades": int(metrics.get("total_trades", 0)),
+        "net_pnl": round(float(metrics.get("net_pnl", 0.0)), 4),
+        "profit_factor": round(float(metrics.get("profit_factor", 0.0)), 4),
+        "max_drawdown": round(float(metrics.get("max_drawdown", 0.0)), 4),
+        "win_rate": round(float(metrics.get("win_rate", 0.0)), 4),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _dedupe_results_by_behavior(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    """
+    功能：依回測行為去重，只保留同一行為指紋中 rank_score 最好的 candidate。
+    """
+    best_by_fp: dict[str, dict[str, object]] = {}
+
+    for row in results:
+        metrics = dict(row["metrics"])
+        fp = _build_behavior_fingerprint(metrics)
+        existing = best_by_fp.get(fp)
+
+        if existing is None:
+            best_by_fp[fp] = row
+            continue
+
+        current_score = float(row["rank_score"])
+        existing_score = float(existing["rank_score"])
+
+        if current_score > existing_score:
+            best_by_fp[fp] = row
+            continue
+
+        if current_score == existing_score and int(row["candidate_no"]) < int(existing["candidate_no"]):
+            best_by_fp[fp] = row
+
+    deduped = list(best_by_fp.values())
+    deduped.sort(key=lambda item: (float(item["rank_score"]), -int(item["candidate_no"])), reverse=True)
+    return deduped
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run candidate search v2")
+    parser = argparse.ArgumentParser(description="Run candidate search v3")
     parser.add_argument("--symbol", type=str, default=None, help="例如 BTCUSDT")
     parser.add_argument("--interval", type=str, default=None, help="例如 15m")
-    parser.add_argument("--start-date", type=str,
-                        required=True, help="YYYY-MM-DD")
-    parser.add_argument("--end-date", type=str,
-                        required=True, help="YYYY-MM-DD，不含當日")
-    parser.add_argument("--version-code", type=str,
-                        default=None, help="不帶則使用 ACTIVE")
+    parser.add_argument("--start-date", type=str, required=True, help="YYYY-MM-DD")
+    parser.add_argument("--end-date", type=str, required=True, help="YYYY-MM-DD，不含當日")
+    parser.add_argument("--version-code", type=str, default=None, help="不帶則使用 ACTIVE")
     parser.add_argument("--top", type=int, default=10, help="顯示前幾名，預設 10")
-    parser.add_argument("--max-candidates", type=int,
-                        default=100, help="最多跑幾組 candidate，預設 100")
-    parser.add_argument("--progress-step", type=int,
-                        default=10, help="每幾組印一次進度，預設 10")
+    parser.add_argument("--max-candidates", type=int, default=100, help="最多跑幾組 candidate，預設 100")
+    parser.add_argument("--progress-step", type=int, default=10, help="每幾組印一次進度，預設 10")
     args = parser.parse_args()
 
     if args.max_candidates <= 0:
@@ -133,7 +175,7 @@ def main() -> None:
     print("")
 
     started_at = time.time()
-    results: list[dict[str, object]] = []
+    raw_results: list[dict[str, object]] = []
 
     for idx, candidate_params in enumerate(candidates, start=1):
         replay_result = run_backtest_replay(
@@ -157,7 +199,7 @@ def main() -> None:
             "params": candidate_params,
             "metrics": metrics,
         }
-        results.append(row)
+        raw_results.append(row)
 
         if idx % args.progress_step == 0 or idx == len(candidates):
             elapsed = _format_elapsed(time.time() - started_at)
@@ -168,23 +210,25 @@ def main() -> None:
                 f"latest_net_pnl={float(metrics['net_pnl']):.8f}"
             )
 
-    results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
+    deduped_results = _dedupe_results_by_behavior(raw_results)
+    deduped_results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
 
     print("")
-    print("candidate search v2 完成")
+    print("candidate search v3 完成")
     print(f"symbol={symbol}")
     print(f"interval={interval}")
     print(f"version_code={strategy['version_code']}")
     print(f"range_start={start_time.isoformat()}")
     print(f"range_end={end_time.isoformat()}")
     print(f"kline_count={len(klines)}")
-    print(f"candidate_count={len(results)}")
+    print(f"raw_candidate_count={len(raw_results)}")
+    print(f"deduped_candidate_count={len(deduped_results)}")
     print(f"elapsed={_format_elapsed(time.time() - started_at)}")
     print("")
 
-    top_n = min(args.top, len(results))
+    top_n = min(args.top, len(deduped_results))
     for i in range(top_n):
-        item = results[i]
+        item = deduped_results[i]
         metrics = item["metrics"]
         params = item["params"]
 

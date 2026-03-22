@@ -1,6 +1,6 @@
 """
 Path: scripts/run_candidate_search_and_save.py
-說明：執行 candidate search 並將結果寫入 strategy_candidates。
+說明：執行 candidate search、做行為去重，並將結果寫入 strategy_candidates。
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from pathlib import Path
 import json
 import sys
 import time
+from typing import Any
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
@@ -68,8 +69,46 @@ def _format_elapsed(seconds: float) -> str:
     return f"{minutes:02d}:{remain:02d}"
 
 
+def _build_behavior_fingerprint(metrics: dict[str, Any]) -> str:
+    payload = {
+        "total_trades": int(metrics.get("total_trades", 0)),
+        "net_pnl": round(float(metrics.get("net_pnl", 0.0)), 4),
+        "profit_factor": round(float(metrics.get("profit_factor", 0.0)), 4),
+        "max_drawdown": round(float(metrics.get("max_drawdown", 0.0)), 4),
+        "win_rate": round(float(metrics.get("win_rate", 0.0)), 4),
+    }
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True)
+
+
+def _dedupe_results_by_behavior(results: list[dict[str, object]]) -> list[dict[str, object]]:
+    best_by_fp: dict[str, dict[str, object]] = {}
+
+    for row in results:
+        metrics = dict(row["metrics"])
+        fp = _build_behavior_fingerprint(metrics)
+        existing = best_by_fp.get(fp)
+
+        if existing is None:
+            best_by_fp[fp] = row
+            continue
+
+        current_score = float(row["rank_score"])
+        existing_score = float(existing["rank_score"])
+
+        if current_score > existing_score:
+            best_by_fp[fp] = row
+            continue
+
+        if current_score == existing_score and int(row["candidate_no"]) < int(existing["candidate_no"]):
+            best_by_fp[fp] = row
+
+    deduped = list(best_by_fp.values())
+    deduped.sort(key=lambda item: (float(item["rank_score"]), -int(item["candidate_no"])), reverse=True)
+    return deduped
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run candidate search and save v2")
+    parser = argparse.ArgumentParser(description="Run candidate search and save v3")
     parser.add_argument("--symbol", type=str, default=None)
     parser.add_argument("--interval", type=str, default=None)
     parser.add_argument("--start-date", type=str, required=True)
@@ -136,28 +175,51 @@ def main() -> None:
     print("")
 
     started_at = time.time()
-    saved_count = 0
+    raw_results: list[dict[str, object]] = []
+
+    for idx, candidate_params in enumerate(candidates, start=1):
+        replay_result = run_backtest_replay(
+            klines=klines,
+            strategy_version_id=int(strategy["strategy_version_id"]),
+            symbol=symbol,
+            interval=interval,
+            params=candidate_params,
+        )
+
+        metrics = calculate_backtest_metrics(
+            trades=replay_result["trades"],
+            equity_curve=replay_result["equity_curve"],
+        )
+
+        rank_score = calculate_candidate_score(metrics)
+
+        raw_results.append(
+            {
+                "rank_score": rank_score,
+                "candidate_no": idx,
+                "params": candidate_params,
+                "metrics": metrics,
+            }
+        )
+
+        if idx % args.progress_step == 0 or idx == len(candidates):
+            elapsed = _format_elapsed(time.time() - started_at)
+            print(
+                f"[progress] {idx}/{len(candidates)} "
+                f"elapsed={elapsed} "
+                f"latest_score={rank_score:.8f} "
+                f"latest_net_pnl={float(metrics['net_pnl']):.8f}"
+            )
+
+    deduped_results = _dedupe_results_by_behavior(raw_results)
+    deduped_results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
 
     conn = get_connection()
+    saved_count = 0
     top_rows: list[dict[str, object]] = []
 
     try:
-        for idx, candidate_params in enumerate(candidates, start=1):
-            replay_result = run_backtest_replay(
-                klines=klines,
-                strategy_version_id=int(strategy["strategy_version_id"]),
-                symbol=symbol,
-                interval=interval,
-                params=candidate_params,
-            )
-
-            metrics = calculate_backtest_metrics(
-                trades=replay_result["trades"],
-                equity_curve=replay_result["equity_curve"],
-            )
-
-            rank_score = calculate_candidate_score(metrics)
-
+        for idx, row in enumerate(deduped_results, start=1):
             upsert_strategy_candidate(
                 conn,
                 source_strategy_version_id=int(strategy["strategy_version_id"]),
@@ -166,25 +228,15 @@ def main() -> None:
                 tested_range_start=start_time,
                 tested_range_end=end_time,
                 candidate_no=idx,
-                params=candidate_params,
-                metrics=metrics,
-                rank_score=rank_score,
-                note="candidate search v3 - generator v5 weights",
+                params=dict(row["params"]),
+                metrics=dict(row["metrics"]),
+                rank_score=float(row["rank_score"]),
+                note="candidate search v4 - behavior dedupe",
             )
             saved_count += 1
 
             if idx % args.commit_step == 0:
                 conn.commit()
-
-            if idx % args.progress_step == 0 or idx == len(candidates):
-                elapsed = _format_elapsed(time.time() - started_at)
-                print(
-                    f"[progress] {idx}/{len(candidates)} "
-                    f"saved={saved_count} "
-                    f"elapsed={elapsed} "
-                    f"latest_score={rank_score:.8f} "
-                    f"latest_net_pnl={float(metrics['net_pnl']):.8f}"
-                )
 
         conn.commit()
 
@@ -210,7 +262,8 @@ def main() -> None:
                 "interval": interval,
                 "tested_range_start": start_time.isoformat(),
                 "tested_range_end": end_time.isoformat(),
-                "candidate_count": len(candidates),
+                "raw_candidate_count": len(raw_results),
+                "deduped_candidate_count": len(deduped_results),
                 "saved_count": saved_count,
                 "top_candidate_id": int(top_rows[0]["candidate_id"]) if top_rows else None,
                 "top_rank_score": float(top_rows[0]["rank_score"]) if top_rows else None,
@@ -236,14 +289,15 @@ def main() -> None:
         conn.close()
 
     print("")
-    print("candidate search and save v2 完成")
+    print("candidate search and save v3 完成")
     print(f"symbol={symbol}")
     print(f"interval={interval}")
     print(f"version_code={strategy['version_code']}")
     print(f"range_start={start_time.isoformat()}")
     print(f"range_end={end_time.isoformat()}")
     print(f"kline_count={len(klines)}")
-    print(f"candidate_count={len(candidates)}")
+    print(f"raw_candidate_count={len(raw_results)}")
+    print(f"deduped_candidate_count={len(deduped_results)}")
     print(f"saved_count={saved_count}")
     print(f"elapsed={_format_elapsed(time.time() - started_at)}")
     print("")
