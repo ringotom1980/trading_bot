@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from storage.db import connection_scope
+from evolver.promoter import calculate_walk_forward_score
 from storage.repositories.candidate_walk_forward_repo import (
     get_latest_passed_candidate_walk_forward_run,
 )
@@ -210,6 +211,10 @@ def main() -> None:
         selected_validation_payload: dict[str, Any] = {}
         selected_params: dict[str, Any] = {}
         selected_source_mode: str | None = None
+        selected_walk_forward_score: float | None = None
+
+        passed_walk_forward_candidates: list[dict[str, Any]] = []
+        fallback_single_range_candidates: list[dict[str, Any]] = []
 
         for candidate in top_candidates:
             candidate_id = int(candidate["candidate_id"])
@@ -235,14 +240,20 @@ def main() -> None:
             )
 
             if walk_forward_run is not None:
-                best_candidate = candidate
-                best_candidate_id = candidate_id
-                selected_rank_score = candidate_rank_score
-                selected_validation_payload = dict(walk_forward_run.get("summary_json") or {})
-                selected_validation_metrics = dict(walk_forward_run.get("summary_json") or {})
-                selected_params = candidate_params
-                selected_source_mode = "walk_forward"
-                break
+                summary = dict(walk_forward_run.get("summary_json") or {})
+                wf_score = calculate_walk_forward_score(summary)
+
+                passed_walk_forward_candidates.append(
+                    {
+                        "candidate": candidate,
+                        "candidate_id": candidate_id,
+                        "candidate_params": candidate_params,
+                        "candidate_rank_score": candidate_rank_score,
+                        "summary": summary,
+                        "wf_score": wf_score,
+                    }
+                )
+                continue
 
             payload = _load_validation_payload(candidate)
             if payload is None:
@@ -258,14 +269,50 @@ def main() -> None:
             if payload.get("validation_status") != "VALIDATED_PASS":
                 continue
 
-            best_candidate = candidate
-            best_candidate_id = candidate_id
-            selected_rank_score = candidate_rank_score
-            selected_validation_payload = payload
-            selected_validation_metrics = dict(payload.get("candidate_validation_metrics") or {})
-            selected_params = candidate_params
+            fallback_single_range_candidates.append(
+                {
+                    "candidate": candidate,
+                    "candidate_id": candidate_id,
+                    "candidate_params": candidate_params,
+                    "candidate_rank_score": candidate_rank_score,
+                    "payload": payload,
+                }
+            )
+            
+        if passed_walk_forward_candidates:
+            passed_walk_forward_candidates.sort(
+                key=lambda item: (
+                    float(item["wf_score"]),
+                    float(item["candidate_rank_score"]),
+                ),
+                reverse=True,
+            )
+
+            chosen = passed_walk_forward_candidates[0]
+            best_candidate = chosen["candidate"]
+            best_candidate_id = int(chosen["candidate_id"])
+            selected_rank_score = float(chosen["candidate_rank_score"])
+            selected_validation_payload = dict(chosen["summary"])
+            selected_validation_metrics = dict(chosen["summary"])
+            selected_params = dict(chosen["candidate_params"])
+            selected_source_mode = "walk_forward"
+            selected_walk_forward_score = float(chosen["wf_score"])
+
+        elif fallback_single_range_candidates:
+            fallback_single_range_candidates.sort(
+                key=lambda item: float(item["candidate_rank_score"]),
+                reverse=True,
+            )
+
+            chosen = fallback_single_range_candidates[0]
+            best_candidate = chosen["candidate"]
+            best_candidate_id = int(chosen["candidate_id"])
+            selected_rank_score = float(chosen["candidate_rank_score"])
+            selected_validation_payload = dict(chosen["payload"])
+            selected_validation_metrics = dict(chosen["payload"].get("candidate_validation_metrics") or {})
+            selected_params = dict(chosen["candidate_params"])
             selected_source_mode = "single_range"
-            break
+            selected_walk_forward_score = None
 
         if best_candidate is None or best_candidate_id is None or selected_rank_score is None:
             create_system_event(
@@ -348,6 +395,8 @@ def main() -> None:
                 "new_version_code": new_version_code,
                 "validation_metrics": selected_validation_metrics,
                 "promotion_score": float(selected_rank_score),
+                "validation_source_mode": selected_source_mode,
+                "walk_forward_score": selected_walk_forward_score,
                 "validation_range_start": start_time.isoformat(),
                 "validation_range_end": end_time.isoformat(),
             },
@@ -369,6 +418,7 @@ def main() -> None:
     print(f"new_strategy_version_id={new_strategy_version_id}")
     print(f"new_version_code={new_version_code}")
     print(f"validation_source_mode={selected_source_mode}")
+    print(f"walk_forward_score={selected_walk_forward_score}")
     print("validation_metrics=" + json.dumps(selected_validation_metrics, ensure_ascii=False, sort_keys=True))
     
 if __name__ == "__main__":

@@ -29,11 +29,14 @@ DEFAULT_WALK_FORWARD_WINDOW_GATE = {
 
 DEFAULT_WALK_FORWARD_GATE = {
     "min_pass_windows": 2,
-    "min_beat_active_windows": 1,
+    "min_beat_active_windows": 2,
     "min_pass_ratio": 0.50,
     "min_avg_net_pnl": 0.0,
     "min_avg_profit_factor": 1.05,
     "max_avg_drawdown": 90.0,
+    "max_drawdown_relaxation_vs_active": 3.0,
+    "min_profit_factor_edge_vs_active": 0.05,
+    "min_net_pnl_edge_vs_active": 0.0,
 }
 
 
@@ -202,6 +205,7 @@ def check_walk_forward_promotion_gate(
 
     active_avg_net_pnl = float(summary.get("active_avg_net_pnl", 0.0) or 0.0)
     active_avg_profit_factor = float(summary.get("active_avg_profit_factor", 0.0) or 0.0)
+    active_avg_max_drawdown = float(summary.get("active_avg_max_drawdown", 0.0) or 0.0)
 
     if total_windows <= 0:
         reasons.append("total_windows 無效：必須大於 0")
@@ -236,9 +240,23 @@ def check_walk_forward_promotion_gate(
             f"avg_max_drawdown 超標：{avg_max_drawdown:.8f} > {float(gate_cfg['max_avg_drawdown']):.8f}"
         )
 
-    if avg_net_pnl < active_avg_net_pnl and avg_profit_factor < active_avg_profit_factor:
+    max_drawdown_relaxation_vs_active = float(gate_cfg["max_drawdown_relaxation_vs_active"])
+    min_profit_factor_edge_vs_active = float(gate_cfg["min_profit_factor_edge_vs_active"])
+    min_net_pnl_edge_vs_active = float(gate_cfg["min_net_pnl_edge_vs_active"])
+
+    better_net_pnl = avg_net_pnl >= (active_avg_net_pnl + min_net_pnl_edge_vs_active)
+    better_profit_factor = avg_profit_factor >= (active_avg_profit_factor + min_profit_factor_edge_vs_active)
+    acceptable_drawdown = avg_max_drawdown <= (active_avg_max_drawdown + max_drawdown_relaxation_vs_active)
+
+    if not acceptable_drawdown:
         reasons.append(
-            "walk-forward 相對 ACTIVE 不足：avg_net_pnl 與 avg_profit_factor 皆未優於 ACTIVE"
+            f"avg_max_drawdown 相對 ACTIVE 過大：{avg_max_drawdown:.8f} > "
+            f"{(active_avg_max_drawdown + max_drawdown_relaxation_vs_active):.8f}"
+        )
+
+    if not (better_net_pnl or better_profit_factor):
+        reasons.append(
+            "walk-forward 相對 ACTIVE 不足：avg_net_pnl 與 avg_profit_factor 皆未達相對優勢門檻"
         )
 
     return len(reasons) == 0, reasons
@@ -308,3 +326,33 @@ def check_walk_forward_window_gate(
             )
 
     return len(reasons) == 0, reasons
+
+
+def calculate_walk_forward_score(summary: dict[str, Any]) -> float:
+    pass_windows = int(summary.get("pass_windows", 0) or 0)
+    beat_active_windows = int(summary.get("beat_active_windows", 0) or 0)
+    pass_ratio = float(summary.get("pass_ratio", 0.0) or 0.0)
+
+    avg_net_pnl = float(summary.get("avg_net_pnl", 0.0) or 0.0)
+    avg_profit_factor = float(summary.get("avg_profit_factor", 0.0) or 0.0)
+    avg_max_drawdown = float(summary.get("avg_max_drawdown", 0.0) or 0.0)
+    worst_window_drawdown = float(summary.get("worst_window_drawdown", 0.0) or 0.0)
+
+    active_avg_net_pnl = float(summary.get("active_avg_net_pnl", 0.0) or 0.0)
+    active_avg_profit_factor = float(summary.get("active_avg_profit_factor", 0.0) or 0.0)
+    active_avg_max_drawdown = float(summary.get("active_avg_max_drawdown", 0.0) or 0.0)
+
+    score = 0.0
+    score += pass_windows * 8.0
+    score += beat_active_windows * 10.0
+    score += pass_ratio * 20.0
+    score += avg_net_pnl * 1.2
+    score += avg_profit_factor * 18.0
+    score -= avg_max_drawdown * 0.35
+    score -= worst_window_drawdown * 0.15
+
+    score += max(avg_net_pnl - active_avg_net_pnl, 0.0) * 1.5
+    score += max(avg_profit_factor - active_avg_profit_factor, 0.0) * 20.0
+    score -= max(avg_max_drawdown - active_avg_max_drawdown, 0.0) * 0.8
+
+    return score
