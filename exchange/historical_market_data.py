@@ -95,10 +95,18 @@ def fetch_klines_range(
         },
     )
 
-    return [
+    normalized_rows = [
         normalize_kline_row(symbol=symbol, interval=interval, row=row)
         for row in raw_rows
     ]
+
+
+    filtered_rows = [
+        row for row in normalized_rows
+        if start_time <= row["open_time"] < end_time
+    ]
+
+    return filtered_rows
 
 
 def fetch_klines_range_all(
