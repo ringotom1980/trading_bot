@@ -20,6 +20,13 @@ DEFAULT_PROMOTION_GATE = {
 }
 
 
+DEFAULT_WALK_FORWARD_WINDOW_GATE = {
+    "min_total_trades": 12,
+    "min_profit_factor": 0.90,
+    "max_drawdown_relaxation": 8.0,
+}
+
+
 DEFAULT_WALK_FORWARD_GATE = {
     "min_pass_windows": 2,
     "min_beat_active_windows": 1,
@@ -233,5 +240,71 @@ def check_walk_forward_promotion_gate(
         reasons.append(
             "walk-forward 相對 ACTIVE 不足：avg_net_pnl 與 avg_profit_factor 皆未優於 ACTIVE"
         )
+
+    return len(reasons) == 0, reasons
+
+
+def check_walk_forward_window_gate(
+    candidate_metrics: dict[str, Any],
+    active_metrics: dict[str, Any],
+    gate: dict[str, Any] | None = None,
+) -> tuple[bool, list[str]]:
+    gate_cfg = dict(DEFAULT_WALK_FORWARD_WINDOW_GATE)
+    if gate:
+        gate_cfg.update(gate)
+
+    reasons: list[str] = []
+
+    candidate_net_pnl = _to_float(candidate_metrics, "net_pnl")
+    candidate_profit_factor = _to_float(candidate_metrics, "profit_factor")
+    candidate_max_drawdown = _to_float(candidate_metrics, "max_drawdown")
+    candidate_total_trades = _to_int(candidate_metrics, "total_trades")
+
+    active_net_pnl = _to_float(active_metrics, "net_pnl")
+    active_profit_factor = _to_float(active_metrics, "profit_factor")
+    active_max_drawdown = _to_float(active_metrics, "max_drawdown")
+
+    min_total_trades = int(gate_cfg["min_total_trades"])
+    min_profit_factor = float(gate_cfg["min_profit_factor"])
+    max_drawdown_relaxation = float(gate_cfg["max_drawdown_relaxation"])
+
+    if candidate_total_trades < min_total_trades:
+        reasons.append(
+            f"window total_trades 未達標：{candidate_total_trades} < {min_total_trades}"
+        )
+
+    path_a_pass = (
+        candidate_net_pnl >= active_net_pnl
+        and candidate_profit_factor >= min_profit_factor
+    )
+
+    path_b_pass = (
+        candidate_profit_factor >= active_profit_factor
+        and candidate_max_drawdown <= (active_max_drawdown + max_drawdown_relaxation)
+    )
+
+    if not path_a_pass and not path_b_pass:
+        reasons.append("未通過 walk-forward window gate：需符合 path A 或 path B")
+
+        if candidate_net_pnl < active_net_pnl:
+            reasons.append(
+                f"window net_pnl 不足：{candidate_net_pnl:.8f} < active {active_net_pnl:.8f}"
+            )
+
+        if candidate_profit_factor < min_profit_factor:
+            reasons.append(
+                f"window profit_factor 未達最低門檻：{candidate_profit_factor:.8f} < {min_profit_factor:.8f}"
+            )
+
+        if candidate_profit_factor < active_profit_factor:
+            reasons.append(
+                f"window profit_factor 未優於 active：{candidate_profit_factor:.8f} < {active_profit_factor:.8f}"
+            )
+
+        if candidate_max_drawdown > (active_max_drawdown + max_drawdown_relaxation):
+            reasons.append(
+                f"window max_drawdown 過大：{candidate_max_drawdown:.8f} > "
+                f"{(active_max_drawdown + max_drawdown_relaxation):.8f}"
+            )
 
     return len(reasons) == 0, reasons

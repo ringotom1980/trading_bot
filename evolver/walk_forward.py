@@ -10,7 +10,10 @@ from typing import Any
 
 from backtest.metrics import calculate_backtest_metrics
 from backtest.replay_engine import run_backtest_replay
-from evolver.promoter import check_promotion_gate, check_walk_forward_promotion_gate
+from evolver.promoter import (
+    check_walk_forward_promotion_gate,
+    check_walk_forward_window_gate,
+)
 from storage.repositories.historical_klines_repo import get_historical_klines_by_range
 
 
@@ -188,10 +191,9 @@ def run_walk_forward_for_candidate(
             params=active_params,
         )
 
-        passed, reasons = check_promotion_gate(
+        passed, reasons = check_walk_forward_window_gate(
             candidate_metrics=candidate_metrics,
             active_metrics=active_metrics,
-            candidate_rank_score=float(candidate["rank_score"]),
         )
 
         beat_active = (
