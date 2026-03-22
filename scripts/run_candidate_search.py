@@ -4,17 +4,6 @@ Path: scripts/run_candidate_search.py
 """
 
 from __future__ import annotations
-from storage.repositories.strategy_versions_repo import (
-    get_active_strategy_version,
-    get_strategy_version_by_code,
-)
-from storage.repositories.historical_klines_repo import get_historical_klines_by_range
-from storage.db import connection_scope
-from evolver.scorer import calculate_candidate_score
-from evolver.generator import generate_param_candidates
-from config.settings import load_settings
-from backtest.replay_engine import run_backtest_replay
-from backtest.metrics import calculate_backtest_metrics
 
 import argparse
 from datetime import datetime, timezone
@@ -26,6 +15,18 @@ import time
 ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
+
+from backtest.metrics import calculate_backtest_metrics
+from backtest.replay_engine import run_backtest_replay
+from config.settings import load_settings
+from evolver.generator import generate_param_candidates
+from evolver.scorer import calculate_candidate_score
+from storage.db import connection_scope
+from storage.repositories.historical_klines_repo import get_historical_klines_by_range
+from storage.repositories.strategy_versions_repo import (
+    get_active_strategy_version,
+    get_strategy_version_by_code,
+)
 
 
 def _format_weight_summary(weights: dict[str, float], top_n: int = 3) -> str:

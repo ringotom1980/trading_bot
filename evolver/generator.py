@@ -183,6 +183,24 @@ def _copy_params(base_params: dict[str, Any]) -> dict[str, Any]:
     return deepcopy(base_params)
 
 
+def _apply_safe_defaults(params: dict[str, Any]) -> dict[str, Any]:
+    normalized = _copy_params(params)
+
+    if float(normalized.get("hard_stop_loss_pct", 0.0)) <= 0:
+        normalized["hard_stop_loss_pct"] = 0.015
+
+    if float(normalized.get("take_profit_pct", 0.0)) <= 0:
+        normalized["take_profit_pct"] = 0.03
+
+    if int(normalized.get("min_hold_bars", 0)) <= 0:
+        normalized["min_hold_bars"] = 1
+
+    if int(normalized.get("max_bars_hold", 0)) <= int(normalized.get("min_hold_bars", 1)):
+        normalized["max_bars_hold"] = max(int(normalized.get("min_hold_bars", 1)) + 12, 24)
+
+    return normalized
+
+
 def _resolve_base_weights(base_params: dict[str, Any]) -> dict[str, dict[str, float]]:
     base_weights = base_params.get("weights")
     if not isinstance(base_weights, dict):
@@ -222,6 +240,7 @@ def _normalize_weight_map(weight_map: dict[str, float]) -> dict[str, float]:
 
 
 def _build_weight_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
+    base_params = _apply_safe_defaults(base_params)
     base_weights = _resolve_base_weights(base_params)
     variants: list[dict[str, Any]] = []
 
@@ -254,6 +273,7 @@ def _build_weight_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
+    base_params = _apply_safe_defaults(base_params)
     variants: list[dict[str, Any]] = []
 
     for field, (deltas, digits) in THRESHOLD_FIELD_SPECS.items():
@@ -357,8 +377,8 @@ def generate_param_candidates(
         - 不再用超大 product 暴力展開
         - 改成較可控的 mutation pool
     """
-    normalized_base = _copy_params(base_params)
-    normalized_base["weights"] = _build_weight_variants(base_params)[0]["weights"]
+    normalized_base = _apply_safe_defaults(base_params)
+    normalized_base["weights"] = _build_weight_variants(normalized_base)[0]["weights"]
 
     weight_variants = _build_weight_variants(normalized_base)
     threshold_variants = _build_threshold_variants(normalized_base)
