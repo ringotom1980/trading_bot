@@ -33,7 +33,6 @@ def _clamp(value: float, min_value: float = 0.0, max_value: float = 1.0) -> floa
 def _score_positive_ratio(value: float, scale: float) -> float:
     if scale <= 0:
         return 0.5
-
     normalized = 0.5 + (value / scale) * 0.5
     return _clamp(normalized)
 
@@ -41,7 +40,6 @@ def _score_positive_ratio(value: float, scale: float) -> float:
 def _score_negative_ratio(value: float, scale: float) -> float:
     if scale <= 0:
         return 0.5
-
     normalized = 0.5 + ((-value) / scale) * 0.5
     return _clamp(normalized)
 
@@ -72,34 +70,56 @@ def _build_component_scores(feature_pack: dict[str, Any]) -> tuple[dict[str, flo
     return long_components, short_components
 
 
+def _normalize_weights(raw_weights: dict[str, float], allowed_keys: list[str]) -> dict[str, float]:
+    """
+    功能：只保留 signals 目前真正使用到的 keys，並將有效權重正規化到總和 = 1。
+    """
+    filtered: dict[str, float] = {}
+
+    for key in allowed_keys:
+        value = raw_weights.get(key)
+        if value is None:
+            continue
+        filtered[key] = float(value)
+
+    total = sum(filtered.values())
+
+    if total <= 0:
+        equal_weight = 1.0 / len(allowed_keys)
+        return {key: equal_weight for key in allowed_keys}
+
+    return {key: filtered.get(key, 0.0) / total for key in allowed_keys}
+
+
 def _resolve_weights(params: dict[str, Any] | None) -> dict[str, dict[str, float]]:
+    allowed_keys = list(DEFAULT_WEIGHTS["long"].keys())
+
     if not params:
-        return DEFAULT_WEIGHTS
+        return {
+            "long": dict(DEFAULT_WEIGHTS["long"]),
+            "short": dict(DEFAULT_WEIGHTS["short"]),
+        }
 
     raw_weights = params.get("weights")
     if not isinstance(raw_weights, dict):
-        return DEFAULT_WEIGHTS
+        return {
+            "long": dict(DEFAULT_WEIGHTS["long"]),
+            "short": dict(DEFAULT_WEIGHTS["short"]),
+        }
 
     long_weights = raw_weights.get("long")
     short_weights = raw_weights.get("short")
 
     if not isinstance(long_weights, dict) or not isinstance(short_weights, dict):
-        return DEFAULT_WEIGHTS
+        return {
+            "long": dict(DEFAULT_WEIGHTS["long"]),
+            "short": dict(DEFAULT_WEIGHTS["short"]),
+        }
 
-    resolved = {
-        "long": dict(DEFAULT_WEIGHTS["long"]),
-        "short": dict(DEFAULT_WEIGHTS["short"]),
+    return {
+        "long": _normalize_weights(long_weights, allowed_keys),
+        "short": _normalize_weights(short_weights, allowed_keys),
     }
-
-    for key in resolved["long"]:
-        if key in long_weights:
-            resolved["long"][key] = float(long_weights[key])
-
-    for key in resolved["short"]:
-        if key in short_weights:
-            resolved["short"][key] = float(short_weights[key])
-
-    return resolved
 
 
 def calculate_signal_scores(
