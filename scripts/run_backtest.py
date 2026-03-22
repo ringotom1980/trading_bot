@@ -104,3 +104,6 @@ def main() -> None:
         print("last_trade:")
         for key in sorted(last_trade.keys()):
             print(f"  {key}={last_trade[key]}")
+            
+if __name__ == "__main__":
+    main()
