@@ -37,8 +37,55 @@ def _parse_date_to_utc_start(date_text: str) -> datetime:
     return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
 
 
-def _build_active_metrics(active_strategy: dict[str, Any]) -> dict[str, Any]:
-    return dict(active_strategy.get("backtest_summary_json") or {})
+def _run_strategy_validation(
+    *,
+    klines: list[dict[str, Any]],
+    strategy_version_id: int,
+    symbol: str,
+    interval: str,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    replay_result = run_backtest_replay(
+        klines=klines,
+        strategy_version_id=strategy_version_id,
+        symbol=symbol,
+        interval=interval,
+        params=params,
+    )
+
+    return calculate_backtest_metrics(
+        trades=replay_result["trades"],
+        equity_curve=replay_result["equity_curve"],
+    )
+
+
+def _build_active_validation_metrics(
+    *,
+    conn,
+    active_strategy: dict[str, Any],
+    start_time: datetime,
+    end_time: datetime,
+) -> tuple[dict[str, Any], int]:
+    klines = get_historical_klines_by_range(
+        conn,
+        symbol=str(active_strategy["symbol"]),
+        interval=str(active_strategy["interval"]),
+        start_time=start_time,
+        end_time=end_time,
+    )
+
+    if len(klines) < 61:
+        raise RuntimeError(f"ACTIVE 驗證區間歷史 K 線不足，got={len(klines)}")
+
+    active_params = dict(active_strategy["params_json"] or {})
+    active_metrics = _run_strategy_validation(
+        klines=klines,
+        strategy_version_id=int(active_strategy["strategy_version_id"]),
+        symbol=str(active_strategy["symbol"]),
+        interval=str(active_strategy["interval"]),
+        params=active_params,
+    )
+    return active_metrics, len(klines)
 
 
 def _validate_one_candidate(
@@ -47,7 +94,7 @@ def _validate_one_candidate(
     candidate: dict[str, Any],
     start_time: datetime,
     end_time: datetime,
-    active_metrics: dict[str, Any],
+    active_validation_metrics: dict[str, Any],
     persist_result: bool,
 ) -> dict[str, Any]:
     klines = get_historical_klines_by_range(
@@ -65,7 +112,7 @@ def _validate_one_candidate(
 
     params = dict(candidate["params_json"] or {})
 
-    replay_result = run_backtest_replay(
+    candidate_metrics = _run_strategy_validation(
         klines=klines,
         strategy_version_id=int(candidate["source_strategy_version_id"]),
         symbol=str(candidate["symbol"]),
@@ -73,26 +120,23 @@ def _validate_one_candidate(
         params=params,
     )
 
-    metrics = calculate_backtest_metrics(
-        trades=replay_result["trades"],
-        equity_curve=replay_result["equity_curve"],
-    )
-
     passed, reasons = check_promotion_gate(
-        candidate_metrics=metrics,
-        active_metrics=active_metrics,
+        candidate_metrics=candidate_metrics,
+        active_metrics=active_validation_metrics,
         candidate_rank_score=float(candidate["rank_score"]),
     )
 
     validation_status = "VALIDATED_PASS" if passed else "VALIDATED_FAIL"
-    db_candidate_status = "APPROVED" if passed else "REJECTED"
 
     validation_payload = {
         "validation_range_start": start_time.isoformat(),
         "validation_range_end": end_time.isoformat(),
         "validation_status": validation_status,
-        "db_candidate_status": db_candidate_status,
-        "validation_metrics": metrics,
+        "candidate_id": int(candidate["candidate_id"]),
+        "candidate_no": int(candidate["candidate_no"]),
+        "candidate_rank_score": float(candidate["rank_score"]),
+        "candidate_validation_metrics": candidate_metrics,
+        "active_validation_metrics": active_validation_metrics,
         "validation_reasons": reasons,
     }
 
@@ -111,7 +155,7 @@ def _validate_one_candidate(
         "interval": str(candidate["interval"]),
         "rank_score": float(candidate["rank_score"]),
         "validation_status": validation_status,
-        "validation_metrics": metrics,
+        "validation_metrics": candidate_metrics,
         "validation_reasons": reasons,
         "kline_count": len(klines),
     }
@@ -149,7 +193,12 @@ def main() -> None:
             if active_strategy is None:
                 raise RuntimeError("找不到 ACTIVE 策略版本")
 
-        active_metrics = _build_active_metrics(active_strategy)
+        active_validation_metrics, active_kline_count = _build_active_validation_metrics(
+            conn=conn,
+            active_strategy=active_strategy,
+            start_time=start_time,
+            end_time=end_time,
+        )
 
         candidates: list[dict[str, Any]] = []
 
@@ -164,8 +213,8 @@ def main() -> None:
                 source_strategy_version_id=int(active_strategy["strategy_version_id"]),
                 symbol=str(active_strategy["symbol"]),
                 interval=str(active_strategy["interval"]),
-                tested_range_start=active_strategy["created_at"] if False else start_time,  # placeholder 不使用
-                tested_range_end=end_time if False else end_time,  # placeholder 不使用
+                tested_range_start=start_time,
+                tested_range_end=end_time,
                 limit=int(args.top_limit or 10),
                 ignore_range=True,
             )
@@ -180,7 +229,7 @@ def main() -> None:
                 candidate=candidate,
                 start_time=start_time,
                 end_time=end_time,
-                active_metrics=active_metrics,
+                active_validation_metrics=active_validation_metrics,
                 persist_result=bool(args.persist),
             )
             results.append(result)
@@ -189,6 +238,17 @@ def main() -> None:
     print(f"validation_range_start={start_time.isoformat()}")
     print(f"validation_range_end={end_time.isoformat()}")
     print(f"validated_count={len(results)}")
+    print("")
+    print("===== ACTIVE VALIDATION BASELINE =====")
+    print(f"symbol={active_strategy['symbol']}")
+    print(f"interval={active_strategy['interval']}")
+    print(f"kline_count={active_kline_count}")
+    print(f"total_trades={int(active_validation_metrics['total_trades'])}")
+    print(f"win_rate={float(active_validation_metrics['win_rate']):.4f}")
+    print(f"net_pnl={float(active_validation_metrics['net_pnl']):.8f}")
+    print(f"profit_factor={float(active_validation_metrics['profit_factor']):.8f}")
+    print(f"max_drawdown={float(active_validation_metrics['max_drawdown']):.8f}")
+    print("active_validation_metrics=" + json.dumps(active_validation_metrics, ensure_ascii=False, sort_keys=True))
     print("")
 
     for idx, result in enumerate(results, start=1):

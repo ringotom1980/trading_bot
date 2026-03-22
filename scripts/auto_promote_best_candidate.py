@@ -1,6 +1,6 @@
 """
 Path: scripts/auto_promote_best_candidate.py
-說明：自動挑選指定測試區間的最佳 candidate，通過 gate 且無持倉時自動 promote 成 ACTIVE。
+說明：自動挑選指定 validation 區間中已驗證通過的最佳 candidate，且無持倉時自動 promote 成 ACTIVE。
 """
 
 from __future__ import annotations
@@ -16,7 +16,6 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
-from evolver.promoter import check_promotion_gate
 from storage.db import connection_scope
 from storage.repositories.strategy_candidates_repo import (
     get_top_strategy_candidates,
@@ -45,33 +44,49 @@ def _build_version_code(base_version_code: str, candidate_id: int) -> str:
 
 
 def _normalize_for_compare(value: Any) -> Any:
-    """
-    功能：將 params 結構正規化，方便做穩定比對。
-    """
     if isinstance(value, dict):
         return {k: _normalize_for_compare(value[k]) for k in sorted(value.keys())}
-
     if isinstance(value, list):
         return [_normalize_for_compare(item) for item in value]
-
     return value
 
 
 def _params_equal(left: dict[str, Any], right: dict[str, Any]) -> bool:
-    """
-    功能：比較兩組 params 是否完全相同。
-    """
     return _normalize_for_compare(left) == _normalize_for_compare(right)
 
 
-def _build_active_metrics(active_strategy: dict[str, Any]) -> dict[str, Any]:
-    return dict(active_strategy.get("backtest_summary_json") or {})
+def _load_validation_payload(candidate: dict[str, Any]) -> dict[str, Any] | None:
+    note = candidate.get("note")
+    if not isinstance(note, str) or not note.strip():
+        return None
+
+    try:
+        payload = json.loads(note)
+    except Exception:
+        return None
+
+    if not isinstance(payload, dict):
+        return None
+
+    return payload
+
+
+def _is_matching_validation_range(
+    payload: dict[str, Any],
+    *,
+    start_time: datetime,
+    end_time: datetime,
+) -> bool:
+    return (
+        payload.get("validation_range_start") == start_time.isoformat()
+        and payload.get("validation_range_end") == end_time.isoformat()
+    )
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Auto promote best candidate v2")
-    parser.add_argument("--start-date", type=str, required=True)
-    parser.add_argument("--end-date", type=str, required=True)
+    parser = argparse.ArgumentParser(description="Auto promote best validated candidate")
+    parser.add_argument("--start-date", type=str, required=True, help="validation start YYYY-MM-DD")
+    parser.add_argument("--end-date", type=str, required=True, help="validation end YYYY-MM-DD")
     parser.add_argument("--top-limit", type=int, default=10)
     args = parser.parse_args()
 
@@ -126,6 +141,7 @@ def main() -> None:
             tested_range_start=start_time,
             tested_range_end=end_time,
             limit=args.top_limit,
+            ignore_range=True,
         )
 
         if not top_candidates:
@@ -139,8 +155,8 @@ def main() -> None:
                     "active_strategy_version_id": active_strategy_version_id,
                     "symbol": str(active_strategy["symbol"]),
                     "interval": str(active_strategy["interval"]),
-                    "tested_range_start": start_time.isoformat(),
-                    "tested_range_end": end_time.isoformat(),
+                    "validation_range_start": start_time.isoformat(),
+                    "validation_range_end": end_time.isoformat(),
                 },
                 created_by="auto_promote_best_candidate",
                 engine_mode_before=system_state["engine_mode"],
@@ -158,17 +174,16 @@ def main() -> None:
             return
 
         active_params = dict(active_strategy["params_json"] or {})
-        active_metrics = _build_active_metrics(active_strategy)
 
         best_candidate = None
         best_candidate_id: int | None = None
-        metrics: dict[str, Any] = {}
-        params: dict[str, Any] = {}
         selected_rank_score: float | None = None
+        selected_validation_metrics: dict[str, Any] = {}
+        selected_validation_payload: dict[str, Any] = {}
+        selected_params: dict[str, Any] = {}
 
         for candidate in top_candidates:
             candidate_id = int(candidate["candidate_id"])
-            candidate_metrics = dict(candidate["metrics_json"] or {})
             candidate_params = dict(candidate["params_json"] or {})
             candidate_rank_score = float(candidate["rank_score"])
 
@@ -181,26 +196,26 @@ def main() -> None:
                 )
                 continue
 
-            passed, reasons = check_promotion_gate(
-                candidate_metrics=candidate_metrics,
-                active_metrics=active_metrics,
-                candidate_rank_score=candidate_rank_score,
-            )
+            payload = _load_validation_payload(candidate)
+            if payload is None:
+                continue
 
-            if not passed:
-                update_strategy_candidate_status(
-                    conn,
-                    candidate_id=candidate_id,
-                    candidate_status="REJECTED",
-                    note="; ".join(reasons),
-                )
+            if not _is_matching_validation_range(
+                payload,
+                start_time=start_time,
+                end_time=end_time,
+            ):
+                continue
+
+            if payload.get("validation_status") != "VALIDATED_PASS":
                 continue
 
             best_candidate = candidate
             best_candidate_id = candidate_id
-            metrics = candidate_metrics
-            params = candidate_params
             selected_rank_score = candidate_rank_score
+            selected_validation_payload = payload
+            selected_validation_metrics = dict(payload.get("candidate_validation_metrics") or {})
+            selected_params = candidate_params
             break
 
         if best_candidate is None or best_candidate_id is None or selected_rank_score is None:
@@ -209,11 +224,12 @@ def main() -> None:
                 event_type="GUARD_TRIGGERED",
                 event_level="INFO",
                 source="SYSTEM",
-                message="auto promote 中止：top candidates 全數未通過 gate",
+                message="auto promote 中止：validation 區間內無通過 candidate",
                 details={
                     "active_strategy_version_id": active_strategy_version_id,
                     "candidate_checked_count": len(top_candidates),
-                    "active_metrics": active_metrics,
+                    "validation_range_start": start_time.isoformat(),
+                    "validation_range_end": end_time.isoformat(),
                 },
                 created_by="auto_promote_best_candidate",
                 engine_mode_before=system_state["engine_mode"],
@@ -228,7 +244,7 @@ def main() -> None:
                 strategy_version_after=active_strategy_version_id,
             )
 
-            print("auto promote 中止：top candidates 全數未通過 gate")
+            print("auto promote 中止：validation 區間內無通過 candidate")
             return
 
         new_version_code = _build_version_code(
@@ -248,14 +264,9 @@ def main() -> None:
             symbol=str(active_strategy["symbol"]),
             interval=str(active_strategy["interval"]),
             feature_set=dict(active_strategy["feature_set_json"] or {}),
-            params=params,
-            backtest_summary=metrics,
-            validation_summary={
-                "candidate_id": best_candidate_id,
-                "tested_range_start": start_time.isoformat(),
-                "tested_range_end": end_time.isoformat(),
-                "gate_passed": True,
-            },
+            params=selected_params,
+            backtest_summary=selected_validation_metrics,
+            validation_summary=selected_validation_payload,
             promotion_score=float(selected_rank_score),
             note=f"auto promoted from candidate_id={best_candidate_id}",
         )
@@ -285,8 +296,10 @@ def main() -> None:
                 "old_strategy_version_id": active_strategy_version_id,
                 "new_strategy_version_id": new_strategy_version_id,
                 "new_version_code": new_version_code,
-                "metrics": metrics,
+                "validation_metrics": selected_validation_metrics,
                 "promotion_score": float(selected_rank_score),
+                "validation_range_start": start_time.isoformat(),
+                "validation_range_end": end_time.isoformat(),
             },
             created_by="auto_promote_best_candidate",
             engine_mode_before=system_state["engine_mode"],
@@ -305,8 +318,4 @@ def main() -> None:
     print(f"candidate_id={best_candidate_id}")
     print(f"new_strategy_version_id={new_strategy_version_id}")
     print(f"new_version_code={new_version_code}")
-    print("metrics=" + json.dumps(metrics, ensure_ascii=False, sort_keys=True))
-
-
-if __name__ == "__main__":
-    main()
+    print("validation_metrics=" + json.dumps(selected_validation_metrics, ensure_ascii=False, sort_keys=True))
