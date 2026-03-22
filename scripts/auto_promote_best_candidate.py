@@ -30,6 +30,7 @@ from storage.repositories.system_state_repo import (
     get_system_state,
     update_active_strategy_version,
 )
+from storage.repositories.system_events_repo import create_system_event
 
 
 def _parse_date_to_utc_start(date_text: str) -> datetime:
@@ -64,13 +65,37 @@ def main() -> None:
         if system_state is None:
             raise RuntimeError("找不到 system_state(id=1)")
 
+        active_strategy_version_id = int(active_strategy["strategy_version_id"])
+
         if system_state["current_position_id"] is not None:
+            create_system_event(
+                conn,
+                event_type="GUARD_TRIGGERED",
+                event_level="INFO",
+                source="SYSTEM",
+                message="auto promote 中止：目前仍有持倉，禁止切版",
+                details={
+                    "current_position_id": system_state["current_position_id"],
+                    "active_strategy_version_id": active_strategy_version_id,
+                },
+                created_by="auto_promote_best_candidate",
+                engine_mode_before=system_state["engine_mode"],
+                engine_mode_after=system_state["engine_mode"],
+                trade_mode_before=system_state["trade_mode"],
+                trade_mode_after=system_state["trade_mode"],
+                trading_state_before=system_state["trading_state"],
+                trading_state_after=system_state["trading_state"],
+                live_armed_before=system_state["live_armed"],
+                live_armed_after=system_state["live_armed"],
+                strategy_version_before=active_strategy_version_id,
+                strategy_version_after=active_strategy_version_id,
+            )
             print("auto promote 中止：目前仍有持倉，禁止切版")
             return
 
         top_candidates = get_top_strategy_candidates(
             conn,
-            source_strategy_version_id=int(active_strategy["strategy_version_id"]),
+            source_strategy_version_id=active_strategy_version_id,
             symbol=str(active_strategy["symbol"]),
             interval=str(active_strategy["interval"]),
             tested_range_start=start_time,
@@ -79,22 +104,75 @@ def main() -> None:
         )
 
         if not top_candidates:
+            create_system_event(
+                conn,
+                event_type="GUARD_TRIGGERED",
+                event_level="INFO",
+                source="SYSTEM",
+                message="auto promote 中止：找不到 candidate",
+                details={
+                    "active_strategy_version_id": active_strategy_version_id,
+                    "symbol": str(active_strategy["symbol"]),
+                    "interval": str(active_strategy["interval"]),
+                    "tested_range_start": start_time.isoformat(),
+                    "tested_range_end": end_time.isoformat(),
+                },
+                created_by="auto_promote_best_candidate",
+                engine_mode_before=system_state["engine_mode"],
+                engine_mode_after=system_state["engine_mode"],
+                trade_mode_before=system_state["trade_mode"],
+                trade_mode_after=system_state["trade_mode"],
+                trading_state_before=system_state["trading_state"],
+                trading_state_after=system_state["trading_state"],
+                live_armed_before=system_state["live_armed"],
+                live_armed_after=system_state["live_armed"],
+                strategy_version_before=active_strategy_version_id,
+                strategy_version_after=active_strategy_version_id,
+            )
             print("auto promote 中止：找不到 candidate")
             return
 
         best_candidate = top_candidates[0]
+        best_candidate_id = int(best_candidate["candidate_id"])
         metrics = dict(best_candidate["metrics_json"] or {})
         params = dict(best_candidate["params_json"] or {})
 
         passed, reasons = check_promotion_gate(metrics)
 
         if not passed:
+            reject_note = "; ".join(reasons)
+
             update_strategy_candidate_status(
                 conn,
-                candidate_id=int(best_candidate["candidate_id"]),
+                candidate_id=best_candidate_id,
                 candidate_status="REJECTED",
-                note="; ".join(reasons),
+                note=reject_note,
             )
+
+            create_system_event(
+                conn,
+                event_type="GUARD_TRIGGERED",
+                event_level="INFO",
+                source="SYSTEM",
+                message="auto promote 中止：best candidate 未通過 gate",
+                details={
+                    "candidate_id": best_candidate_id,
+                    "reasons": reasons,
+                    "metrics": metrics,
+                },
+                created_by="auto_promote_best_candidate",
+                engine_mode_before=system_state["engine_mode"],
+                engine_mode_after=system_state["engine_mode"],
+                trade_mode_before=system_state["trade_mode"],
+                trade_mode_after=system_state["trade_mode"],
+                trading_state_before=system_state["trading_state"],
+                trading_state_after=system_state["trading_state"],
+                live_armed_before=system_state["live_armed"],
+                live_armed_after=system_state["live_armed"],
+                strategy_version_before=active_strategy_version_id,
+                strategy_version_after=active_strategy_version_id,
+            )
+
             print("auto promote 中止：best candidate 未通過 gate")
             for reason in reasons:
                 print(f"- {reason}")
@@ -102,17 +180,17 @@ def main() -> None:
 
         new_version_code = _build_version_code(
             str(active_strategy["version_code"]),
-            int(best_candidate["candidate_id"]),
+            best_candidate_id,
         )
 
         retire_active_strategy(
             conn,
-            retired_note=f"retired by auto promote from candidate_id={best_candidate['candidate_id']}",
+            retired_note=f"retired by auto promote from candidate_id={best_candidate_id}",
         )
 
         new_strategy_version_id = create_evolved_strategy_version(
             conn,
-            base_version_id=int(active_strategy["strategy_version_id"]),
+            base_version_id=active_strategy_version_id,
             version_code=new_version_code,
             symbol=str(active_strategy["symbol"]),
             interval=str(active_strategy["interval"]),
@@ -120,13 +198,13 @@ def main() -> None:
             params=params,
             backtest_summary=metrics,
             validation_summary={
-                "candidate_id": int(best_candidate["candidate_id"]),
+                "candidate_id": best_candidate_id,
                 "tested_range_start": start_time.isoformat(),
                 "tested_range_end": end_time.isoformat(),
                 "gate_passed": True,
             },
             promotion_score=float(best_candidate["rank_score"]),
-            note=f"auto promoted from candidate_id={best_candidate['candidate_id']}",
+            note=f"auto promoted from candidate_id={best_candidate_id}",
         )
 
         update_active_strategy_version(
@@ -138,13 +216,39 @@ def main() -> None:
 
         update_strategy_candidate_status(
             conn,
-            candidate_id=int(best_candidate["candidate_id"]),
+            candidate_id=best_candidate_id,
             candidate_status="APPROVED",
             note=f"auto promoted to strategy_version_id={new_strategy_version_id}",
         )
 
+        create_system_event(
+            conn,
+            event_type="MANUAL_ACTION",
+            event_level="INFO",
+            source="SYSTEM",
+            message="auto promote 完成",
+            details={
+                "candidate_id": best_candidate_id,
+                "old_strategy_version_id": active_strategy_version_id,
+                "new_strategy_version_id": new_strategy_version_id,
+                "new_version_code": new_version_code,
+                "metrics": metrics,
+            },
+            created_by="auto_promote_best_candidate",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=active_strategy_version_id,
+            strategy_version_after=new_strategy_version_id,
+        )
+
     print("auto promote 完成")
-    print(f"candidate_id={best_candidate['candidate_id']}")
+    print(f"candidate_id={best_candidate_id}")
     print(f"new_strategy_version_id={new_strategy_version_id}")
     print(f"new_version_code={new_version_code}")
     print("metrics=" + json.dumps(metrics, ensure_ascii=False, sort_keys=True))

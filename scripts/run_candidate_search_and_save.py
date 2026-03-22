@@ -30,6 +30,7 @@ from storage.repositories.strategy_versions_repo import (
     get_active_strategy_version,
     get_strategy_version_by_code,
 )
+from storage.repositories.system_events_repo import create_system_event
 
 
 def _parse_date_to_utc_start(date_text: str) -> datetime:
@@ -122,6 +123,36 @@ def main() -> None:
             tested_range_start=start_time,
             tested_range_end=end_time,
             limit=args.top,
+        )
+        
+        create_system_event(
+            conn,
+            event_type="MANUAL_ACTION",
+            event_level="INFO",
+            source="SYSTEM",
+            message="candidate search and save 完成",
+            details={
+                "source_strategy_version_id": int(strategy["strategy_version_id"]),
+                "symbol": symbol,
+                "interval": interval,
+                "tested_range_start": start_time.isoformat(),
+                "tested_range_end": end_time.isoformat(),
+                "candidate_count": len(candidates),
+                "saved_count": saved_count,
+                "top_candidate_id": int(top_rows[0]["candidate_id"]) if top_rows else None,
+                "top_rank_score": float(top_rows[0]["rank_score"]) if top_rows else None,
+            },
+            created_by="run_candidate_search_and_save",
+            engine_mode_before="BACKTEST",
+            engine_mode_after="BACKTEST",
+            trade_mode_before=None,
+            trade_mode_after=None,
+            trading_state_before="OFF",
+            trading_state_after="OFF",
+            live_armed_before=False,
+            live_armed_after=False,
+            strategy_version_before=int(strategy["strategy_version_id"]),
+            strategy_version_after=int(strategy["strategy_version_id"]),
         )
 
     print("candidate search and save v1 完成")
