@@ -259,3 +259,70 @@ def get_latest_candidate_walk_forward_run(
         return None
 
     return _row_to_walk_forward_run(row)
+
+
+def get_latest_passed_candidate_walk_forward_run(
+    conn: PgConnection,
+    *,
+    candidate_id: int,
+    validation_range_start: datetime,
+    validation_range_end: datetime,
+    window_days: int,
+    step_days: int,
+) -> dict[str, Any] | None:
+    sql = """
+    SELECT
+        run_id,
+        candidate_id,
+        source_strategy_version_id,
+        symbol,
+        interval,
+        train_range_start,
+        train_range_end,
+        validation_range_start,
+        validation_range_end,
+        window_days,
+        step_days,
+        total_windows,
+        pass_windows,
+        beat_active_windows,
+        pass_ratio,
+        avg_net_pnl,
+        avg_profit_factor,
+        avg_max_drawdown,
+        worst_window_net_pnl,
+        worst_window_drawdown,
+        active_avg_net_pnl,
+        active_avg_profit_factor,
+        active_avg_max_drawdown,
+        final_status,
+        summary_json,
+        created_at
+    FROM candidate_walk_forward_runs
+    WHERE candidate_id = %s
+      AND validation_range_start = %s
+      AND validation_range_end = %s
+      AND window_days = %s
+      AND step_days = %s
+      AND final_status = 'PASS'
+    ORDER BY created_at DESC, run_id DESC
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                candidate_id,
+                validation_range_start,
+                validation_range_end,
+                window_days,
+                step_days,
+            ),
+        )
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return _row_to_walk_forward_run(row)

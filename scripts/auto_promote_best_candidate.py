@@ -17,6 +17,9 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from storage.db import connection_scope
+from storage.repositories.candidate_walk_forward_repo import (
+    get_latest_passed_candidate_walk_forward_run,
+)
 from storage.repositories.strategy_candidates_repo import (
     get_top_strategy_candidates,
     update_strategy_candidate_status,
@@ -105,7 +108,15 @@ def main() -> None:
     parser.add_argument("--start-date", type=str, required=True, help="validation start YYYY-MM-DD")
     parser.add_argument("--end-date", type=str, required=True, help="validation end YYYY-MM-DD")
     parser.add_argument("--top-limit", type=int, default=10)
+    parser.add_argument("--window-days", type=int, default=5, help="walk-forward window 天數")
+    parser.add_argument("--step-days", type=int, default=3, help="walk-forward step 天數")
     args = parser.parse_args()
+    
+    if args.window_days <= 0:
+        raise ValueError("--window-days 必須大於 0")
+
+    if args.step_days <= 0:
+        raise ValueError("--step-days 必須大於 0")
 
     start_time = _parse_date_to_utc_start(args.start_date)
     end_time = _parse_date_to_utc_start(args.end_date)
@@ -198,6 +209,7 @@ def main() -> None:
         selected_validation_metrics: dict[str, Any] = {}
         selected_validation_payload: dict[str, Any] = {}
         selected_params: dict[str, Any] = {}
+        selected_source_mode: str | None = None
 
         for candidate in top_candidates:
             candidate_id = int(candidate["candidate_id"])
@@ -212,6 +224,25 @@ def main() -> None:
                     note="candidate params 與目前 ACTIVE 相同",
                 )
                 continue
+
+            walk_forward_run = get_latest_passed_candidate_walk_forward_run(
+                conn,
+                candidate_id=candidate_id,
+                validation_range_start=start_time,
+                validation_range_end=end_time,
+                window_days=int(args.window_days),
+                step_days=int(args.step_days),
+            )
+
+            if walk_forward_run is not None:
+                best_candidate = candidate
+                best_candidate_id = candidate_id
+                selected_rank_score = candidate_rank_score
+                selected_validation_payload = dict(walk_forward_run.get("summary_json") or {})
+                selected_validation_metrics = dict(walk_forward_run.get("summary_json") or {})
+                selected_params = candidate_params
+                selected_source_mode = "walk_forward"
+                break
 
             payload = _load_validation_payload(candidate)
             if payload is None:
@@ -233,6 +264,7 @@ def main() -> None:
             selected_validation_payload = payload
             selected_validation_metrics = dict(payload.get("candidate_validation_metrics") or {})
             selected_params = candidate_params
+            selected_source_mode = "single_range"
             break
 
         if best_candidate is None or best_candidate_id is None or selected_rank_score is None:
@@ -247,6 +279,7 @@ def main() -> None:
                     "candidate_checked_count": len(top_candidates),
                     "validation_range_start": start_time.isoformat(),
                     "validation_range_end": end_time.isoformat(),
+                    "validation_source_mode": selected_source_mode,
                 },
                 created_by="auto_promote_best_candidate",
                 engine_mode_before=system_state["engine_mode"],
@@ -335,6 +368,7 @@ def main() -> None:
     print(f"candidate_id={best_candidate_id}")
     print(f"new_strategy_version_id={new_strategy_version_id}")
     print(f"new_version_code={new_version_code}")
+    print(f"validation_source_mode={selected_source_mode}")
     print("validation_metrics=" + json.dumps(selected_validation_metrics, ensure_ascii=False, sort_keys=True))
     
 if __name__ == "__main__":
