@@ -122,6 +122,56 @@ def _renumber_results(results: list[dict[str, object]]) -> list[dict[str, object
     return renumbered
 
 
+def _extract_family_tag(params: dict[str, Any]) -> str:
+    """
+    功能：從 mutation_tag 萃出 family，用來限制同一家族的候選數量。
+    """
+    mutation_tag = str(params.get("mutation_tag") or "").strip()
+    if not mutation_tag:
+        return "base"
+
+    if "+" in mutation_tag:
+        parts = [part.strip() for part in mutation_tag.split("+") if part.strip()]
+        for part in reversed(parts):
+            if ":" not in part:
+                return part
+        return parts[-1] if parts else "unknown"
+
+    if ":" in mutation_tag:
+        field_name = mutation_tag.split(":", 1)[0].strip()
+        return f"threshold:{field_name}"
+
+    return mutation_tag
+
+
+def _apply_family_diversity_cap(
+    results: list[dict[str, object]],
+    *,
+    per_family_limit: int,
+) -> list[dict[str, object]]:
+    """
+    功能：限制同一 family 最多保留 N 個 candidate，增加候選多樣性。
+    """
+    if per_family_limit <= 0:
+        return results
+
+    selected: list[dict[str, object]] = []
+    family_counts: dict[str, int] = {}
+
+    for row in results:
+        params = dict(row["params"])
+        family = _extract_family_tag(params)
+        used = family_counts.get(family, 0)
+
+        if used >= per_family_limit:
+            continue
+
+        selected.append(row)
+        family_counts[family] = used + 1
+
+    return selected
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run candidate search and save v3")
     parser.add_argument("--symbol", type=str, default=None)
@@ -133,6 +183,7 @@ def main() -> None:
     parser.add_argument("--max-candidates", type=int, default=100, help="最多跑幾組 candidate，預設 100")
     parser.add_argument("--progress-step", type=int, default=10, help="每幾組印一次進度，預設 10")
     parser.add_argument("--commit-step", type=int, default=20, help="每幾組 commit 一次，預設 20")
+    parser.add_argument("--per-family-limit", type=int, default=2, help="同一 family 最多保留幾個 candidate，預設 2")
     args = parser.parse_args()
 
     if args.max_candidates <= 0:
@@ -143,6 +194,9 @@ def main() -> None:
 
     if args.commit_step <= 0:
         raise ValueError("--commit-step 必須大於 0")
+    
+    if args.per_family_limit <= 0:
+        raise ValueError("--per-family-limit 必須大於 0")
 
     settings = load_settings()
     symbol = args.symbol or settings.primary_symbol
@@ -228,7 +282,11 @@ def main() -> None:
 
     deduped_results = _dedupe_results_by_behavior(raw_results)
     deduped_results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
-    deduped_results = _renumber_results(deduped_results)
+    diversified_results = _apply_family_diversity_cap(
+        deduped_results,
+        per_family_limit=args.per_family_limit,
+    )
+    diversified_results = _renumber_results(diversified_results)
 
     conn = get_connection()
     saved_count = 0
@@ -245,7 +303,7 @@ def main() -> None:
             tested_range_end=end_time,
         )
 
-        for row in deduped_results:
+        for save_idx, row in enumerate(diversified_results, start=1):
             upsert_strategy_candidate(
                 conn,
                 source_strategy_version_id=int(strategy["strategy_version_id"]),
@@ -257,11 +315,11 @@ def main() -> None:
                 params=dict(row["params"]),
                 metrics=dict(row["metrics"]),
                 rank_score=float(row["rank_score"]),
-                note="candidate search v5 - behavior dedupe with replace",
+                 note="candidate search v6 - behavior dedupe + family diversity",
             )
             saved_count += 1
 
-            if idx % args.commit_step == 0:
+            if save_idx % args.commit_step == 0:
                 conn.commit()
 
         conn.commit()
@@ -290,6 +348,8 @@ def main() -> None:
                 "tested_range_end": end_time.isoformat(),
                 "raw_candidate_count": len(raw_results),
                 "deduped_candidate_count": len(deduped_results),
+                "diversified_candidate_count": len(diversified_results),
+                "per_family_limit": args.per_family_limit,
                 "deleted_count": deleted_count,
                 "saved_count": saved_count,
                 "top_candidate_id": int(top_rows[0]["candidate_id"]) if top_rows else None,
@@ -325,6 +385,8 @@ def main() -> None:
     print(f"kline_count={len(klines)}")
     print(f"raw_candidate_count={len(raw_results)}")
     print(f"deduped_candidate_count={len(deduped_results)}")
+    print(f"diversified_candidate_count={len(diversified_results)}")
+    print(f"per_family_limit={args.per_family_limit}")
     print(f"deleted_count={deleted_count}")
     print(f"saved_count={saved_count}")
     print(f"elapsed={_format_elapsed(time.time() - started_at)}")
@@ -344,6 +406,7 @@ def main() -> None:
         print(f"total_trades={int(metrics.get('total_trades', 0))}")
         print(f"win_rate={float(metrics.get('win_rate', 0.0)):.4f}")
         print(f"mutation_tag={params.get('mutation_tag')}")
+        print(f"family_tag={_extract_family_tag(params)}")
         _print_weight_summary(params)
         print("params=" + json.dumps(params, ensure_ascii=False, sort_keys=True))
         print("")
