@@ -254,10 +254,26 @@ def check_walk_forward_promotion_gate(
             f"{(active_avg_max_drawdown + max_drawdown_relaxation_vs_active):.8f}"
         )
 
-    if not (better_net_pnl or better_profit_factor):
+    net_pnl_tolerance = 0.5
+    profit_factor_tolerance = 0.02
+
+    net_pnl_ok = avg_net_pnl >= (active_avg_net_pnl - net_pnl_tolerance)
+    profit_factor_ok = avg_profit_factor >= (active_avg_profit_factor - profit_factor_tolerance)
+
+    if not (net_pnl_ok or better_net_pnl or profit_factor_ok or better_profit_factor):
         reasons.append(
-            "walk-forward 相對 ACTIVE 不足：avg_net_pnl 與 avg_profit_factor 皆未達相對優勢門檻"
+            "walk-forward 相對 ACTIVE 不足：avg_net_pnl 與 avg_profit_factor 皆未達容忍區間"
         )
+
+        if not net_pnl_ok and not better_net_pnl:
+            reasons.append(
+                f"avg_net_pnl 相對 ACTIVE 偏低：{avg_net_pnl:.8f} < {(active_avg_net_pnl - net_pnl_tolerance):.8f}"
+            )
+
+        if not profit_factor_ok and not better_profit_factor:
+            reasons.append(
+                f"avg_profit_factor 相對 ACTIVE 偏低：{avg_profit_factor:.8f} < {(active_avg_profit_factor - profit_factor_tolerance):.8f}"
+            )
 
     return len(reasons) == 0, reasons
 
