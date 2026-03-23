@@ -90,6 +90,113 @@ def _get_demo_safe_bar_times(
     return safe_open_time, safe_close_time
 
 
+def _calculate_unrealized_pnl_pct(
+    *,
+    side: str,
+    entry_price: float,
+    current_price: float,
+) -> float:
+    """
+    功能：計算未實現報酬率（正數=浮盈，負數=浮虧）。
+    """
+    if entry_price <= 0:
+        return 0.0
+
+    if side == "LONG":
+        return (current_price - entry_price) / entry_price
+
+    if side == "SHORT":
+        return (entry_price - current_price) / entry_price
+
+    raise ValueError(f"不支援的持倉方向：{side}")
+
+
+def _calculate_held_bars(
+    *,
+    opened_at: datetime,
+    current_bar_close_time: datetime,
+    bar_minutes: int,
+) -> int:
+    """
+    功能：計算目前持倉已持有幾根 bar。
+    """
+    if current_bar_close_time <= opened_at:
+        return 0
+
+    hold_seconds = (current_bar_close_time - opened_at).total_seconds()
+    return int(hold_seconds // (bar_minutes * 60))
+
+
+def _evaluate_position_risk_exit(
+    *,
+    open_position: dict[str, Any] | None,
+    latest_kline: dict[str, Any],
+    current_bar_close_time: datetime,
+    params: dict[str, Any] | None,
+    bar_minutes: int = 15,
+) -> dict[str, Any] | None:
+    """
+    功能：持倉中先檢查風控是否應強制 EXIT。
+    回傳：
+        若觸發則回傳 decision_result 格式；否則回傳 None。
+    """
+    if open_position is None or not params:
+        return None
+
+    hard_stop_loss_pct = float(params.get("hard_stop_loss_pct", 0.0) or 0.0)
+    take_profit_pct = float(params.get("take_profit_pct", 0.0) or 0.0)
+    max_bars_hold = int(params.get("max_bars_hold", 0) or 0)
+
+    current_price = float(latest_kline["close"])
+    entry_price = float(open_position["entry_price"])
+    side = str(open_position["side"])
+    opened_at = open_position["opened_at"]
+
+    pnl_pct = _calculate_unrealized_pnl_pct(
+        side=side,
+        entry_price=entry_price,
+        current_price=current_price,
+    )
+
+    if hard_stop_loss_pct > 0 and pnl_pct <= -hard_stop_loss_pct:
+        return {
+            "decision": "EXIT",
+            "decision_score": abs(pnl_pct),
+            "reason_code": "HARD_STOP_LOSS",
+            "reason_summary": (
+                f"觸發固定停損：pnl_pct={pnl_pct:.6f} <= -{hard_stop_loss_pct:.6f}"
+            ),
+        }
+
+    if take_profit_pct > 0 and pnl_pct >= take_profit_pct:
+        return {
+            "decision": "EXIT",
+            "decision_score": pnl_pct,
+            "reason_code": "TAKE_PROFIT",
+            "reason_summary": (
+                f"觸發固定停利：pnl_pct={pnl_pct:.6f} >= {take_profit_pct:.6f}"
+            ),
+        }
+
+    if max_bars_hold > 0 and opened_at is not None:
+        held_bars = _calculate_held_bars(
+            opened_at=opened_at,
+            current_bar_close_time=current_bar_close_time,
+            bar_minutes=bar_minutes,
+        )
+        if held_bars >= max_bars_hold:
+            return {
+                "decision": "EXIT",
+                "decision_score": float(held_bars),
+                "reason_code": "MAX_HOLD_BARS",
+                "reason_summary": (
+                    f"觸發最長持倉限制：held_bars={held_bars} >= max_bars_hold={max_bars_hold}"
+                ),
+            }
+
+    return None
+
+
 def build_decision_context(
     settings: Settings,
     client: BinanceClient,
@@ -268,6 +375,29 @@ def record_runtime_decision(
 
     target_bar_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
     target_bar_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
+    
+    open_position = get_open_position_by_symbol(conn, settings.primary_symbol)
+
+    risk_exit_decision = _evaluate_position_risk_exit(
+        open_position=open_position,
+        latest_kline=latest_kline,
+        current_bar_close_time=target_bar_close_time,
+        params=dict(active_strategy["params_json"] or {}),
+        bar_minutes=15,
+    )
+
+    if risk_exit_decision is not None:
+        logger.info(
+            "風控覆寫策略 decision：original_decision=%s, risk_decision=%s, reason_code=%s, reason_summary=%s",
+            decision_result["decision"],
+            risk_exit_decision["decision"],
+            risk_exit_decision["reason_code"],
+            risk_exit_decision["reason_summary"],
+        )
+        decision_result = {
+            **decision_result,
+            **risk_exit_decision,
+        }
 
     existing_decision = get_decision_by_bar_close_time(
         conn,
@@ -411,8 +541,6 @@ def record_runtime_decision(
                 guard_reason = cooldown_reason
 
     elif decision_result["decision"] == "EXIT":
-        open_position = get_open_position_by_symbol(
-            conn, settings.primary_symbol)
 
         allow_exit, guard_reason = evaluate_exit_guard(
             system_state,
