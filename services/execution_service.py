@@ -461,7 +461,7 @@ def record_runtime_decision(
                 }
 
             logger.info(
-                "同一根 bar 已有相同但未執行 decision，改找下一個可用 bar_close_time：existing_decision_id=%s, decision=%s",
+                "同一根 bar 已有相同但未執行 decision，沿用既有 decision，不重複寫入：existing_decision_id=%s, decision=%s",
                 existing_decision["decision_id"],
                 existing_decision["decision"],
             )
