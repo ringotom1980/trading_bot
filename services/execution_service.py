@@ -220,7 +220,7 @@ def build_decision_context(
     )
 
     signal_scores = calculate_signal_scores(feature_pack, strategy_params)
-    
+
     decision_result = calculate_decision(
         long_score=signal_scores["long_score"],
         short_score=signal_scores["short_score"],
@@ -375,7 +375,7 @@ def record_runtime_decision(
 
     target_bar_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
     target_bar_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
-    
+
     open_position = get_open_position_by_symbol(conn, settings.primary_symbol)
 
     risk_exit_decision = _evaluate_position_risk_exit(
@@ -465,6 +465,16 @@ def record_runtime_decision(
                 existing_decision["decision_id"],
                 existing_decision["decision"],
             )
+            return {
+                "decision_id": existing_decision["decision_id"],
+                "decision": existing_decision["decision"],
+                "executed": existing_decision["executed"],
+                "linked_order_id": existing_decision["linked_order_id"],
+                "position_id_after": existing_decision["position_id_after"],
+                "position_side_after": existing_decision["position_side_after"],
+                "last_trade_id": None,
+                "skipped": True,
+            }
         else:
             logger.info(
                 "同一根 bar 已有不同 decision，改找下一個可用 bar_close_time：existing_decision_id=%s, existing_decision=%s, existing_executed=%s, new_decision=%s",
@@ -475,8 +485,10 @@ def record_runtime_decision(
             )
 
         while True:
-            decision_bar_open_time = decision_bar_open_time + timedelta(microseconds=1)
-            decision_bar_close_time = decision_bar_close_time + timedelta(microseconds=1)
+            decision_bar_open_time = decision_bar_open_time + \
+                timedelta(microseconds=1)
+            decision_bar_close_time = decision_bar_close_time + \
+                timedelta(microseconds=1)
 
             shifted_decision = get_decision_by_bar_close_time(
                 conn,
