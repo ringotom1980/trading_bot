@@ -361,18 +361,7 @@ def record_runtime_decision(
     exit_threshold = float(params.get("exit_threshold", 0.0))
     reverse_threshold = float(params.get("reverse_threshold", 0.0))
     reverse_gap = float(params.get("reverse_gap", 0.0))
-
-    logger.info(
-        "策略分數：long_score=%.6f, short_score=%.6f, entry_threshold=%.6f, exit_threshold=%.6f, reverse_threshold=%.6f, reverse_gap=%.6f, decision=%s",
-        float(signal_scores["long_score"]),
-        float(signal_scores["short_score"]),
-        entry_threshold,
-        exit_threshold,
-        reverse_threshold,
-        reverse_gap,
-        decision_result["decision"],
-    )
-
+    
     target_bar_open_time = _ms_to_datetime(int(latest_kline["open_time"]))
     target_bar_close_time = _ms_to_datetime(int(latest_kline["close_time"]))
 
@@ -384,6 +373,20 @@ def record_runtime_decision(
         current_bar_close_time=target_bar_close_time,
         params=dict(active_strategy["params_json"] or {}),
         bar_minutes=15,
+    )
+
+    logger.info(
+        "策略分數：long_score=%.6f, short_score=%.6f, entry_threshold=%.6f, exit_threshold=%.6f, reverse_threshold=%.6f, reverse_gap=%.6f, decision=%s, latest_close=%.6f, entry_price=%s, risk_exit=%s",
+        float(signal_scores["long_score"]),
+        float(signal_scores["short_score"]),
+        entry_threshold,
+        exit_threshold,
+        reverse_threshold,
+        reverse_gap,
+        decision_result["decision"],
+        float(latest_kline["close"]),
+        None if open_position is None else str(open_position["entry_price"]),
+        None if risk_exit_decision is None else risk_exit_decision["reason_code"],
     )
 
     if risk_exit_decision is not None:
