@@ -127,11 +127,15 @@ def evaluate_exit_guard(
     if is_trading_off(system_state):
         return False, "trading_state=OFF，禁止平倉"
 
-    held_bars = calculate_held_bars(
-        opened_at=open_position["opened_at"],
-        current_bar_close_time=current_bar_close_time,
-        bar_minutes=15,
-    )
+    exchange_position_ref = str(open_position.get("exchange_position_ref") or "")
+    if exchange_position_ref.startswith("startup_adopt:"):
+        held_bars = min_hold_bars
+    else:
+        held_bars = calculate_held_bars(
+            opened_at=open_position["opened_at"],
+            current_bar_close_time=current_bar_close_time,
+            bar_minutes=15,
+        )
 
     if held_bars < min_hold_bars:
         return False, f"尚未達到 min_hold_bars={min_hold_bars}，目前僅持有 {held_bars} 根"
