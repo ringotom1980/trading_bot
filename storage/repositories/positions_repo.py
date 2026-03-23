@@ -162,6 +162,83 @@ def get_position_by_id(conn: PgConnection, position_id: int) -> dict[str, Any] |
         "created_at": row[24],
         "updated_at": row[25],
     }
+    
+def get_open_position_by_exchange_ref(
+    conn: PgConnection,
+    exchange_position_ref: str,
+) -> dict[str, Any] | None:
+    """
+    功能：依交易所持倉參考值查詢目前 OPEN 持倉。
+    """
+    sql = """
+    SELECT
+        position_id,
+        symbol,
+        interval,
+        engine_mode,
+        trade_mode,
+        strategy_version_id,
+        side,
+        status,
+        entry_price,
+        entry_qty,
+        entry_notional,
+        exit_price,
+        exit_qty,
+        gross_pnl,
+        fees,
+        net_pnl,
+        entry_order_id,
+        exit_order_id,
+        entry_decision_id,
+        exit_decision_id,
+        opened_at,
+        closed_at,
+        close_reason,
+        exchange_position_ref,
+        created_at,
+        updated_at
+    FROM positions
+    WHERE exchange_position_ref = %s
+      AND status = 'OPEN'
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (exchange_position_ref,))
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "position_id": row[0],
+        "symbol": row[1],
+        "interval": row[2],
+        "engine_mode": row[3],
+        "trade_mode": row[4],
+        "strategy_version_id": row[5],
+        "side": row[6],
+        "status": row[7],
+        "entry_price": float(row[8]),
+        "entry_qty": float(row[9]),
+        "entry_notional": float(row[10]) if row[10] is not None else None,
+        "exit_price": float(row[11]) if row[11] is not None else None,
+        "exit_qty": float(row[12]) if row[12] is not None else None,
+        "gross_pnl": float(row[13]) if row[13] is not None else None,
+        "fees": float(row[14]) if row[14] is not None else None,
+        "net_pnl": float(row[15]) if row[15] is not None else None,
+        "entry_order_id": row[16],
+        "exit_order_id": row[17],
+        "entry_decision_id": row[18],
+        "exit_decision_id": row[19],
+        "opened_at": row[20],
+        "closed_at": row[21],
+        "close_reason": row[22],
+        "exchange_position_ref": row[23],
+        "created_at": row[24],
+        "updated_at": row[25],
+    }
 
 def create_position(
     conn: PgConnection,
