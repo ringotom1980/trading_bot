@@ -406,7 +406,62 @@ def record_runtime_decision(
         bar_close_time=target_bar_close_time,
     )
 
-    if existing_decision is not None:
+    if existing_decision is not None and bool(existing_decision["executed"]):
+        update_runtime_refs(
+            conn,
+            state_id=1,
+            last_bar_close_time=target_bar_close_time,
+            last_decision_id=existing_decision["decision_id"],
+            last_order_id=existing_decision["linked_order_id"],
+            last_trade_id=None,
+            updated_by="runtime_skip_existing_decision",
+        )
+
+        create_system_event(
+            conn,
+            event_type="GUARD_TRIGGERED",
+            event_level="INFO",
+            source="SYSTEM",
+            message="同一根 bar 的已執行 decision 已存在，略過重複寫入",
+            details={
+                "symbol": settings.primary_symbol,
+                "interval": settings.primary_interval,
+                "decision_id": existing_decision["decision_id"],
+                "decision": existing_decision["decision"],
+                "executed": existing_decision["executed"],
+                "bar_close_time": target_bar_close_time.isoformat(),
+            },
+            created_by="record_runtime_decision",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+
+        return {
+            "decision_id": existing_decision["decision_id"],
+            "decision": existing_decision["decision"],
+            "executed": existing_decision["executed"],
+            "linked_order_id": existing_decision["linked_order_id"],
+            "position_id_after": existing_decision["position_id_after"],
+            "position_side_after": existing_decision["position_side_after"],
+            "last_trade_id": None,
+            "skipped": True,
+        }
+
+    if existing_decision is not None and not bool(existing_decision["executed"]):
+        logger.warning(
+            "同一根 bar 發現未執行 decision，允許重試：decision_id=%s, decision=%s, executed=%s",
+            existing_decision["decision_id"],
+            existing_decision["decision"],
+            existing_decision["executed"],
+        )
         update_runtime_refs(
             conn,
             state_id=1,
