@@ -224,7 +224,7 @@ def reconcile_startup_state(
         create_system_event(
             conn,
             event_type="MANUAL_ACTION",
-            event_level="WARNING",
+            event_level="INFO",
             source="SYSTEM",
             message="啟動對帳接管成功：交易所有倉、DB 無倉，已建立接管持倉",
             details={
