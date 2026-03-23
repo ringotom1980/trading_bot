@@ -1,15 +1,22 @@
 """
 Path: scripts/sync_system_state_position.py
-說明：同步目前 OPEN 持倉到 system_state，讓 system_state.current_position_id 與 current_position_side 對上 positions。
+說明：以啟動對帳邏輯同步 system_state 與交易所/DB 持倉。
 """
 
 from __future__ import annotations
 
+import sys
+from pathlib import Path
+
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
 from config.logging import get_logger, setup_logging
 from config.settings import load_settings
+from services.reconciliation_service import reconcile_startup_state
 from storage.db import connection_scope
 from storage.repositories.system_state_repo import get_system_state
-from services.reconciliation_service import reconcile_startup_state
 
 
 def main() -> None:
