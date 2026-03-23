@@ -12,6 +12,7 @@ DEFAULT_ENTRY_THRESHOLD = 0.60
 DEFAULT_EXIT_THRESHOLD = 0.45
 DEFAULT_REVERSE_THRESHOLD = 0.68
 DEFAULT_REVERSE_GAP = 0.08
+DEFAULT_EXIT_GAP = 0.03
 
 
 def _resolve_thresholds(params: dict[str, Any] | None) -> dict[str, float]:
@@ -21,6 +22,7 @@ def _resolve_thresholds(params: dict[str, Any] | None) -> dict[str, float]:
             "exit_threshold": DEFAULT_EXIT_THRESHOLD,
             "reverse_threshold": DEFAULT_REVERSE_THRESHOLD,
             "reverse_gap": DEFAULT_REVERSE_GAP,
+            "exit_gap": DEFAULT_EXIT_GAP,
         }
 
     return {
@@ -28,6 +30,7 @@ def _resolve_thresholds(params: dict[str, Any] | None) -> dict[str, float]:
         "exit_threshold": float(params.get("exit_threshold", DEFAULT_EXIT_THRESHOLD)),
         "reverse_threshold": float(params.get("reverse_threshold", DEFAULT_REVERSE_THRESHOLD)),
         "reverse_gap": float(params.get("reverse_gap", DEFAULT_REVERSE_GAP)),
+        "exit_gap": float(params.get("exit_gap", DEFAULT_EXIT_GAP)),
     }
 
 
@@ -95,6 +98,7 @@ def decide_with_long_position(
     reverse_threshold = thresholds["reverse_threshold"]
     reverse_gap = thresholds["reverse_gap"]
     exit_threshold = thresholds["exit_threshold"]
+    exit_gap = thresholds["exit_gap"]
 
     if short_score >= reverse_threshold and short_score > long_score + reverse_gap:
         return build_decision_result(
@@ -102,6 +106,16 @@ def decide_with_long_position(
             decision_score=short_score,
             reason_code="REVERSE_SIGNAL",
             reason_summary="目前持有 LONG，但 short_score 達反向門檻，先退出等待下一輪反向",
+            long_score=long_score,
+            short_score=short_score,
+        )
+
+    if long_score <= short_score + exit_gap:
+        return build_decision_result(
+            decision="EXIT",
+            decision_score=long_score,
+            reason_code="EDGE_LOST",
+            reason_summary="目前持有 LONG，但 long 優勢已明顯收斂，先退出",
             long_score=long_score,
             short_score=short_score,
         )
@@ -134,6 +148,7 @@ def decide_with_short_position(
     reverse_threshold = thresholds["reverse_threshold"]
     reverse_gap = thresholds["reverse_gap"]
     exit_threshold = thresholds["exit_threshold"]
+    exit_gap = thresholds["exit_gap"]
 
     if long_score >= reverse_threshold and long_score > short_score + reverse_gap:
         return build_decision_result(
@@ -141,6 +156,16 @@ def decide_with_short_position(
             decision_score=long_score,
             reason_code="REVERSE_SIGNAL",
             reason_summary="目前持有 SHORT，但 long_score 達反向門檻，先退出等待下一輪反向",
+            long_score=long_score,
+            short_score=short_score,
+        )
+
+    if short_score <= long_score + exit_gap:
+        return build_decision_result(
+            decision="EXIT",
+            decision_score=short_score,
+            reason_code="EDGE_LOST",
+            reason_summary="目前持有 SHORT，但 short 優勢已明顯收斂，先退出",
             long_score=long_score,
             short_score=short_score,
         )
