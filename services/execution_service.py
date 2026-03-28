@@ -35,6 +35,7 @@ from config.constants import (
 )
 from storage.repositories.decisions_repo import (
     get_decision_by_bar_close_time,
+    get_latest_decision_by_symbol_interval,
     insert_decision_log,
     mark_decision_executed,
 )
@@ -195,6 +196,37 @@ def _evaluate_position_risk_exit(
             }
 
     return None
+
+
+def _classify_exit_decision(
+    *,
+    decision_result: dict[str, Any],
+) -> dict[str, Any]:
+    """
+    功能：將原本單一 EXIT 分成 EXIT_HARD / EXIT_WEAK。
+    """
+    decision = str(decision_result.get("decision") or "")
+    reason_code = str(decision_result.get("reason_code") or "")
+
+    if decision != "EXIT":
+        return decision_result
+
+    hard_reason_codes = {
+        "HARD_STOP_LOSS",
+        "TAKE_PROFIT",
+        "MAX_HOLD_BARS",
+    }
+
+    if reason_code in hard_reason_codes:
+        return {
+            **decision_result,
+            "decision": "EXIT_HARD",
+        }
+
+    return {
+        **decision_result,
+        "decision": "EXIT_WEAK",
+    }
 
 
 def build_decision_context(
@@ -402,6 +434,10 @@ def record_runtime_decision(
             **risk_exit_decision,
         }
 
+    decision_result = _classify_exit_decision(
+        decision_result=decision_result,
+    )
+
     existing_decision = get_decision_by_bar_close_time(
         conn,
         symbol=settings.primary_symbol,
@@ -502,6 +538,12 @@ def record_runtime_decision(
             if shifted_decision is None:
                 break
 
+    latest_previous_decision = get_latest_decision_by_symbol_interval(
+        conn,
+        symbol=settings.primary_symbol,
+        interval=settings.primary_interval,
+    )
+
     decision_id = insert_decision_log(
         conn,
         symbol=settings.primary_symbol,
@@ -588,13 +630,13 @@ def record_runtime_decision(
             else:
                 guard_reason = cooldown_reason
 
-    elif decision_result["decision"] == "EXIT":
+    elif decision_result["decision"] == "EXIT_HARD":
 
         allow_exit, guard_reason = evaluate_exit_guard(
             system_state,
             open_position=open_position,
             current_bar_close_time=target_bar_close_time,
-            min_hold_bars=min_hold_bars,
+            min_hold_bars=0,
         )
 
         if allow_exit:
@@ -609,6 +651,37 @@ def record_runtime_decision(
             if executed:
                 position_id_after = None
                 position_side_after = None
+
+    elif decision_result["decision"] == "EXIT_WEAK":
+        previous_is_weak_exit = (
+            latest_previous_decision is not None
+            and latest_previous_decision["decision"] == "EXIT_WEAK"
+            and latest_previous_decision["position_side_before"] == system_state["current_position_side"]
+            and bool(latest_previous_decision["executed"]) is False
+        )
+
+        if previous_is_weak_exit:
+            allow_exit, guard_reason = evaluate_exit_guard(
+                system_state,
+                open_position=open_position,
+                current_bar_close_time=target_bar_close_time,
+                min_hold_bars=min_hold_bars,
+            )
+
+            if allow_exit:
+                executed, linked_order_id, last_trade_id, guard_reason = execute_exit_flow(
+                    conn,
+                    settings=settings,
+                    system_state=system_state,
+                    active_strategy=active_strategy,
+                    latest_kline=latest_kline,
+                    decision_id=decision_id,
+                )
+                if executed:
+                    position_id_after = None
+                    position_side_after = None
+        else:
+            guard_reason = "弱出場首次確認，先不平倉，等待下一根再次確認"
 
     mark_decision_executed(
         conn,
