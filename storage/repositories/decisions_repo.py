@@ -237,6 +237,74 @@ def get_decision_by_bar_close_time(
         "linked_order_id": row[18],
         "created_at": row[19],
     }
+    
+def get_latest_decision_by_symbol_interval(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+) -> dict[str, Any] | None:
+    """
+    功能：查詢指定 symbol / interval 最新一筆 decisions_log。
+    """
+    sql = """
+    SELECT
+        decision_id,
+        symbol,
+        interval,
+        bar_open_time,
+        bar_close_time,
+        engine_mode,
+        trade_mode,
+        strategy_version_id,
+        position_id_before,
+        position_side_before,
+        decision,
+        decision_score,
+        reason_code,
+        reason_summary,
+        features_json,
+        executed,
+        position_id_after,
+        position_side_after,
+        linked_order_id,
+        created_at
+    FROM decisions_log
+    WHERE symbol = %s
+      AND interval = %s
+    ORDER BY bar_close_time DESC, decision_id DESC
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (symbol, interval))
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "decision_id": row[0],
+        "symbol": row[1],
+        "interval": row[2],
+        "bar_open_time": row[3],
+        "bar_close_time": row[4],
+        "engine_mode": row[5],
+        "trade_mode": row[6],
+        "strategy_version_id": row[7],
+        "position_id_before": row[8],
+        "position_side_before": row[9],
+        "decision": row[10],
+        "decision_score": float(row[11]) if row[11] is not None else None,
+        "reason_code": row[12],
+        "reason_summary": row[13],
+        "features_json": row[14],
+        "executed": row[15],
+        "position_id_after": row[16],
+        "position_side_after": row[17],
+        "linked_order_id": row[18],
+        "created_at": row[19],
+    }
 
 
 def mark_decision_executed(
