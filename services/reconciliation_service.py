@@ -262,7 +262,7 @@ def reconcile_startup_state(
             fees=float(db_open_position["fees"] or 0.0),
             net_pnl=float(db_open_position["net_pnl"] or 0.0),
             closed_at=datetime.now(timezone.utc),
-            close_reason="STARTUP_RECONCILE_EXCHANGE_EMPTY",
+            close_reason="FORCED",
         )
 
         update_current_position(
@@ -284,7 +284,7 @@ def reconcile_startup_state(
                 "exchange_side": None,
                 "db_side": db_side,
                 "db_position_id": db_position_id,
-                "close_reason": "STARTUP_RECONCILE_EXCHANGE_EMPTY",
+                "close_reason": "FORCED",
             },
             created_by="reconcile_startup_state",
             engine_mode_before=system_state["engine_mode"],
