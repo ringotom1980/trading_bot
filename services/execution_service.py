@@ -447,6 +447,8 @@ def record_runtime_decision(
 
     decision_bar_open_time = target_bar_open_time
     decision_bar_close_time = target_bar_close_time
+    decision_id = None
+    reuse_existing_decision = False
 
     if existing_decision is not None:
         if existing_decision["decision"] == decision_result["decision"]:
@@ -499,21 +501,32 @@ def record_runtime_decision(
                     "skipped": True,
                 }
 
-            logger.info(
-                "同一根 bar 已有相同但未執行 decision，沿用既有 decision，不重複寫入：existing_decision_id=%s, decision=%s",
-                existing_decision["decision_id"],
-                existing_decision["decision"],
-            )
-            return {
-                "decision_id": existing_decision["decision_id"],
-                "decision": existing_decision["decision"],
-                "executed": existing_decision["executed"],
-                "linked_order_id": existing_decision["linked_order_id"],
-                "position_id_after": existing_decision["position_id_after"],
-                "position_side_after": existing_decision["position_side_after"],
-                "last_trade_id": None,
-                "skipped": True,
-            }
+            retryable_decisions = {"ENTER_LONG", "ENTER_SHORT", "EXIT_HARD", "EXIT_WEAK"}
+
+            if existing_decision["decision"] in retryable_decisions:
+                logger.info(
+                    "同一根 bar 已有相同但未執行 decision，沿用既有 decision_id 並重試執行：existing_decision_id=%s, decision=%s",
+                    existing_decision["decision_id"],
+                    existing_decision["decision"],
+                )
+                decision_id = existing_decision["decision_id"]
+                reuse_existing_decision = True
+            else:
+                logger.info(
+                    "同一根 bar 已有相同但未執行 decision，且不需重試執行，沿用既有 decision：existing_decision_id=%s, decision=%s",
+                    existing_decision["decision_id"],
+                    existing_decision["decision"],
+                )
+                return {
+                    "decision_id": existing_decision["decision_id"],
+                    "decision": existing_decision["decision"],
+                    "executed": existing_decision["executed"],
+                    "linked_order_id": existing_decision["linked_order_id"],
+                    "position_id_after": existing_decision["position_id_after"],
+                    "position_side_after": existing_decision["position_side_after"],
+                    "last_trade_id": None,
+                    "skipped": True,
+                }
         else:
             logger.info(
                 "同一根 bar 已有不同 decision，改找下一個可用 bar_close_time：existing_decision_id=%s, existing_decision=%s, existing_executed=%s, new_decision=%s",
@@ -523,20 +536,19 @@ def record_runtime_decision(
                 decision_result["decision"],
             )
 
-        while True:
-            decision_bar_open_time = decision_bar_open_time + \
-                timedelta(microseconds=1)
-            decision_bar_close_time = decision_bar_close_time + \
-                timedelta(microseconds=1)
+        if not reuse_existing_decision:
+            while True:
+                decision_bar_open_time = decision_bar_open_time + timedelta(microseconds=1)
+                decision_bar_close_time = decision_bar_close_time + timedelta(microseconds=1)
 
-            shifted_decision = get_decision_by_bar_close_time(
-                conn,
-                symbol=settings.primary_symbol,
-                interval=settings.primary_interval,
-                bar_close_time=decision_bar_close_time,
-            )
-            if shifted_decision is None:
-                break
+                shifted_decision = get_decision_by_bar_close_time(
+                    conn,
+                    symbol=settings.primary_symbol,
+                    interval=settings.primary_interval,
+                    bar_close_time=decision_bar_close_time,
+                )
+                if shifted_decision is None:
+                    break
 
     latest_previous_decision = get_latest_decision_by_symbol_interval(
         conn,
@@ -544,55 +556,57 @@ def record_runtime_decision(
         interval=settings.primary_interval,
     )
 
-    decision_id = insert_decision_log(
-        conn,
-        symbol=settings.primary_symbol,
-        interval=settings.primary_interval,
-        bar_open_time=decision_bar_open_time,
-        bar_close_time=decision_bar_close_time,
-        engine_mode=system_state["engine_mode"],
-        trade_mode=system_state["trade_mode"],
-        strategy_version_id=int(active_strategy["strategy_version_id"]),
-        position_id_before=system_state["current_position_id"],
-        position_side_before=system_state["current_position_side"],
-        decision=decision_result["decision"],
-        decision_score=float(decision_result["decision_score"]),
-        reason_code=decision_result["reason_code"],
-        reason_summary=decision_result["reason_summary"],
-        features=feature_pack,
-        executed=False,
-        position_id_after=None,
-        position_side_after=system_state["current_position_side"],
-        linked_order_id=None,
-    )
+    if not reuse_existing_decision:
+        decision_id = insert_decision_log(
+            conn,
+            symbol=settings.primary_symbol,
+            interval=settings.primary_interval,
+            bar_open_time=decision_bar_open_time,
+            bar_close_time=decision_bar_close_time,
+            engine_mode=system_state["engine_mode"],
+            trade_mode=system_state["trade_mode"],
+            strategy_version_id=int(active_strategy["strategy_version_id"]),
+            position_id_before=system_state["current_position_id"],
+            position_side_before=system_state["current_position_side"],
+            decision=decision_result["decision"],
+            decision_score=float(decision_result["decision_score"]),
+            reason_code=decision_result["reason_code"],
+            reason_summary=decision_result["reason_summary"],
+            features=feature_pack,
+            executed=False,
+            position_id_after=None,
+            position_side_after=system_state["current_position_side"],
+            linked_order_id=None,
+        )
 
-    create_system_event(
-        conn,
-        event_type="DECISION_RECORDED",
-        event_level="INFO",
-        source="SYSTEM",
-        message=f"runtime decision 已寫入：{decision_result['decision']}",
-        details={
-            "decision_id": decision_id,
-            "symbol": settings.primary_symbol,
-            "interval": settings.primary_interval,
-            "decision": decision_result["decision"],
-            "bar_close_time": decision_bar_close_time.isoformat(),
-            "position_id_before": system_state["current_position_id"],
-            "position_side_before": system_state["current_position_side"],
-        },
-        created_by="record_runtime_decision",
-        engine_mode_before=system_state["engine_mode"],
-        engine_mode_after=system_state["engine_mode"],
-        trade_mode_before=system_state["trade_mode"],
-        trade_mode_after=system_state["trade_mode"],
-        trading_state_before=system_state["trading_state"],
-        trading_state_after=system_state["trading_state"],
-        live_armed_before=system_state["live_armed"],
-        live_armed_after=system_state["live_armed"],
-        strategy_version_before=system_state["active_strategy_version_id"],
-        strategy_version_after=system_state["active_strategy_version_id"],
-    )
+        create_system_event(
+            conn,
+            event_type="DECISION_RECORDED",
+            event_level="INFO",
+            source="SYSTEM",
+            message=f"runtime decision 已寫入：{decision_result['decision']}",
+            details={
+                "decision_id": decision_id,
+                "symbol": settings.primary_symbol,
+                "interval": settings.primary_interval,
+                "decision": decision_result["decision"],
+                "bar_close_time": decision_bar_close_time.isoformat(),
+                "position_id_before": system_state["current_position_id"],
+                "position_side_before": system_state["current_position_side"],
+            },
+            created_by="record_runtime_decision",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+
 
     executed = False
     linked_order_id = None
@@ -658,6 +672,7 @@ def record_runtime_decision(
             and latest_previous_decision["decision"] == "EXIT_WEAK"
             and latest_previous_decision["position_side_before"] == system_state["current_position_side"]
             and bool(latest_previous_decision["executed"]) is False
+            and latest_previous_decision["bar_close_time"] < target_bar_close_time
         )
 
         if previous_is_weak_exit:
