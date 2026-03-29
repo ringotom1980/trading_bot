@@ -616,7 +616,8 @@ def create_live_exit_flow(
         return None, None, None, "目前沒有 OPEN 持倉，無法執行 LIVE 平倉"
 
     client = BinanceClient(settings)
-    qty = float(open_position["entry_qty"])
+    db_qty = float(open_position["entry_qty"])
+    qty = db_qty
 
     if open_position["side"] == "LONG":
         order_side = "SELL"
@@ -626,6 +627,137 @@ def create_live_exit_flow(
         gross_pnl_sign = -1.0
 
     client_order_id = f"live_exit_{int(latest_kline['close_time'])}"
+    raw_positions = list(client.get_position_risk(symbol=settings.primary_symbol) or [])
+
+    exchange_position_amt = 0.0
+    for row in raw_positions:
+        if str(row.get("symbol")) != settings.primary_symbol:
+            continue
+        exchange_position_amt = float(row.get("positionAmt") or 0.0)
+        break
+
+    exchange_qty = abs(exchange_position_amt)
+
+    if exchange_qty <= 0:
+        exit_time = _utc_now()
+        entry_time = open_position["opened_at"]
+        if exit_time <= entry_time:
+            exit_time = entry_time + timedelta(microseconds=1)
+
+        update_position_exit_decision_id(
+            conn,
+            position_id=int(open_position["position_id"]),
+            exit_decision_id=decision_id,
+        )
+
+        close_position(
+            conn,
+            position_id=int(open_position["position_id"]),
+            exit_price=float(open_position["entry_price"]),
+            exit_qty=db_qty,
+            gross_pnl=0.0,
+            fees=float(open_position["fees"] or 0.0),
+            net_pnl=float(open_position["net_pnl"] or 0.0),
+            closed_at=exit_time,
+            close_reason="FORCED",
+        )
+
+        update_current_position(
+            conn,
+            state_id=1,
+            current_position_id=None,
+            current_position_side=None,
+            updated_by="live_executor_exit_flow_exchange_empty",
+        )
+
+        create_system_event(
+            conn,
+            event_type="ERROR",
+            event_level="ERROR",
+            source="SYSTEM",
+            message="交易所目前無持倉，已強制關閉本地殘留 OPEN 持倉",
+            details={
+                "decision_id": decision_id,
+                "symbol": settings.primary_symbol,
+                "position_id": int(open_position["position_id"]),
+                "db_side": open_position["side"],
+                "db_qty": db_qty,
+                "exchange_position_amt": exchange_position_amt,
+                "close_reason": "FORCED",
+            },
+            created_by="live_executor_exit_flow",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+        return None, int(open_position["position_id"]), None, "交易所目前無持倉，已強制關閉本地殘留 OPEN 持倉"
+
+    if open_position["side"] == "LONG" and exchange_position_amt < 0:
+        create_system_event(
+            conn,
+            event_type="ERROR",
+            event_level="ERROR",
+            source="SYSTEM",
+            message="LIVE 平倉中止：DB 持倉方向與交易所方向不一致",
+            details={
+                "decision_id": decision_id,
+                "symbol": settings.primary_symbol,
+                "position_id": int(open_position["position_id"]),
+                "db_side": open_position["side"],
+                "db_qty": db_qty,
+                "exchange_position_amt": exchange_position_amt,
+            },
+            created_by="live_executor_exit_flow",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+        return None, None, None, "LIVE 平倉中止：DB 持倉方向與交易所方向不一致"
+
+    if open_position["side"] == "SHORT" and exchange_position_amt > 0:
+        create_system_event(
+            conn,
+            event_type="ERROR",
+            event_level="ERROR",
+            source="SYSTEM",
+            message="LIVE 平倉中止：DB 持倉方向與交易所方向不一致",
+            details={
+                "decision_id": decision_id,
+                "symbol": settings.primary_symbol,
+                "position_id": int(open_position["position_id"]),
+                "db_side": open_position["side"],
+                "db_qty": db_qty,
+                "exchange_position_amt": exchange_position_amt,
+            },
+            created_by="live_executor_exit_flow",
+            engine_mode_before=system_state["engine_mode"],
+            engine_mode_after=system_state["engine_mode"],
+            trade_mode_before=system_state["trade_mode"],
+            trade_mode_after=system_state["trade_mode"],
+            trading_state_before=system_state["trading_state"],
+            trading_state_after=system_state["trading_state"],
+            live_armed_before=system_state["live_armed"],
+            live_armed_after=system_state["live_armed"],
+            strategy_version_before=system_state["active_strategy_version_id"],
+            strategy_version_after=system_state["active_strategy_version_id"],
+        )
+        return None, None, None, "LIVE 平倉中止：DB 持倉方向與交易所方向不一致"
+
+    qty = min(db_qty, exchange_qty)
 
     try:
         raw_response = close_position_reduce_only(
