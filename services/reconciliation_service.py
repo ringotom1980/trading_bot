@@ -14,6 +14,7 @@ from config.logging import get_logger
 from config.settings import Settings
 from exchange.binance_client import BinanceClient
 from storage.repositories.positions_repo import (
+    close_position,
     create_position,
     get_open_position_by_exchange_ref,
     get_open_position_by_symbol,
@@ -250,8 +251,20 @@ def reconcile_startup_state(
         )
         return
 
-    # D. 交易所無倉，DB 有倉 -> 危險，停機
+    # D. 交易所無倉，DB 有倉 -> 視為殘留倉位，強制關閉 DB 倉位並清空 system_state
     if exchange_side is None and db_open_position is not None:
+        close_position(
+            conn,
+            position_id=db_position_id,
+            exit_price=float(db_open_position["entry_price"]),
+            exit_qty=float(db_open_position["entry_qty"]),
+            gross_pnl=0.0,
+            fees=float(db_open_position["fees"] or 0.0),
+            net_pnl=float(db_open_position["net_pnl"] or 0.0),
+            closed_at=datetime.now(timezone.utc),
+            close_reason="STARTUP_RECONCILE_EXCHANGE_EMPTY",
+        )
+
         update_current_position(
             conn,
             state_id=1,
@@ -265,12 +278,13 @@ def reconcile_startup_state(
             event_type="ERROR",
             event_level="ERROR",
             source="SYSTEM",
-            message="啟動對帳異常：交易所無倉，但 DB 仍有 OPEN 持倉",
+            message="啟動對帳修正：交易所無倉，已關閉 DB 殘留 OPEN 持倉",
             details={
                 "symbol": settings.primary_symbol,
                 "exchange_side": None,
                 "db_side": db_side,
                 "db_position_id": db_position_id,
+                "close_reason": "STARTUP_RECONCILE_EXCHANGE_EMPTY",
             },
             created_by="reconcile_startup_state",
             engine_mode_before=system_state["engine_mode"],
@@ -284,7 +298,7 @@ def reconcile_startup_state(
             strategy_version_before=system_state["active_strategy_version_id"],
             strategy_version_after=system_state["active_strategy_version_id"],
         )
-        raise RuntimeError("啟動對帳失敗：交易所無倉，但 DB 仍有 OPEN 持倉")
+        return
 
     # E. 雙方都有倉，但方向不一致 -> 危險，停機
     create_system_event(
