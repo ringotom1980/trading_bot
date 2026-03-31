@@ -17,6 +17,7 @@ from core.state_machine import (
     is_trading_off,
     is_trading_on,
 )
+from datetime import timedelta
 
 def evaluate_runtime_guard(system_state: dict[str, Any]) -> tuple[bool, str]:
     """
@@ -74,6 +75,9 @@ def evaluate_entry_guard(system_state: dict[str, Any]) -> tuple[bool, str]:
 
     return True, "允許新倉"
 
+from datetime import timedelta
+
+
 def evaluate_cooldown_guard(
     *,
     latest_closed_trade: dict[str, Any] | None,
@@ -83,6 +87,9 @@ def evaluate_cooldown_guard(
 ) -> tuple[bool, str]:
     """
     功能：判斷目前是否仍在冷卻期內。
+    規則：
+        - 冷卻以「最近平倉所屬 bar」為基準，不用實際成交秒數。
+        - cooldown_bars=1 表示：平倉後，下一根 bar 可再進場。
     回傳：
         (是否允許進場, 原因說明)
     """
@@ -93,8 +100,16 @@ def evaluate_cooldown_guard(
         return True, "cooldown_bars=0，不受 cooldown 限制"
 
     last_exit_time = latest_closed_trade["exit_time"]
-    seconds = (current_bar_close_time - last_exit_time).total_seconds()
-    cooled_bars = int(seconds // (bar_minutes * 60))
+    bar_seconds = bar_minutes * 60
+
+    # 將實際平倉時間對齊到「該筆平倉所屬的上一根已完成 bar close」
+    aligned_exit_bar_close = current_bar_close_time.__class__.fromtimestamp(
+        ((int(last_exit_time.timestamp()) // bar_seconds) + 1) * bar_seconds,
+        tz=last_exit_time.tzinfo,
+    ) - timedelta(milliseconds=1)
+
+    seconds = (current_bar_close_time - aligned_exit_bar_close).total_seconds()
+    cooled_bars = int(seconds // bar_seconds)
 
     if cooled_bars < cooldown_bars:
         return False, f"尚在 cooldown_bars={cooldown_bars} 冷卻期內，目前僅過 {cooled_bars} 根"

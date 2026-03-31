@@ -16,7 +16,6 @@ from core.guards import (
     evaluate_cooldown_guard,
     evaluate_entry_guard,
     evaluate_exit_guard,
-    evaluate_runtime_guard,
 )
 from exchange.binance_client import BinanceClient
 from exchange.market_data import get_latest_klines
