@@ -37,6 +37,7 @@ from storage.repositories.decisions_repo import (
     get_decision_by_bar_close_time,
     get_latest_decision_by_symbol_interval,
     insert_decision_log,
+    update_decision_log,
     mark_decision_executed,
 )
 from storage.repositories.positions_repo import get_open_position_by_symbol
@@ -451,56 +452,56 @@ def record_runtime_decision(
     reuse_existing_decision = False
 
     if existing_decision is not None:
-        if existing_decision["decision"] == decision_result["decision"]:
-            if bool(existing_decision["executed"]):
-                update_runtime_refs(
-                    conn,
-                    state_id=1,
-                    last_bar_close_time=target_bar_close_time,
-                    last_decision_id=existing_decision["decision_id"],
-                    last_order_id=existing_decision["linked_order_id"],
-                    last_trade_id=None,
-                    updated_by="runtime_skip_existing_decision",
-                )
+        if bool(existing_decision["executed"]):
+            update_runtime_refs(
+                conn,
+                state_id=1,
+                last_bar_close_time=target_bar_close_time,
+                last_decision_id=existing_decision["decision_id"],
+                last_order_id=existing_decision["linked_order_id"],
+                last_trade_id=None,
+                updated_by="runtime_skip_existing_decision",
+            )
 
-                create_system_event(
-                    conn,
-                    event_type="GUARD_TRIGGERED",
-                    event_level="INFO",
-                    source="SYSTEM",
-                    message="同一根 bar 的相同 decision 已存在，略過重複寫入",
-                    details={
-                        "symbol": settings.primary_symbol,
-                        "interval": settings.primary_interval,
-                        "decision_id": existing_decision["decision_id"],
-                        "decision": existing_decision["decision"],
-                        "executed": existing_decision["executed"],
-                        "bar_close_time": target_bar_close_time.isoformat(),
-                    },
-                    created_by="record_runtime_decision",
-                    engine_mode_before=system_state["engine_mode"],
-                    engine_mode_after=system_state["engine_mode"],
-                    trade_mode_before=system_state["trade_mode"],
-                    trade_mode_after=system_state["trade_mode"],
-                    trading_state_before=system_state["trading_state"],
-                    trading_state_after=system_state["trading_state"],
-                    live_armed_before=system_state["live_armed"],
-                    live_armed_after=system_state["live_armed"],
-                    strategy_version_before=system_state["active_strategy_version_id"],
-                    strategy_version_after=system_state["active_strategy_version_id"],
-                )
-
-                return {
+            create_system_event(
+                conn,
+                event_type="GUARD_TRIGGERED",
+                event_level="INFO",
+                source="SYSTEM",
+                message="同一根 bar 已有已執行 decision，略過重複寫入",
+                details={
+                    "symbol": settings.primary_symbol,
+                    "interval": settings.primary_interval,
                     "decision_id": existing_decision["decision_id"],
                     "decision": existing_decision["decision"],
                     "executed": existing_decision["executed"],
-                    "linked_order_id": existing_decision["linked_order_id"],
-                    "position_id_after": existing_decision["position_id_after"],
-                    "position_side_after": existing_decision["position_side_after"],
-                    "last_trade_id": None,
-                    "skipped": True,
-                }
+                    "bar_close_time": target_bar_close_time.isoformat(),
+                },
+                created_by="record_runtime_decision",
+                engine_mode_before=system_state["engine_mode"],
+                engine_mode_after=system_state["engine_mode"],
+                trade_mode_before=system_state["trade_mode"],
+                trade_mode_after=system_state["trade_mode"],
+                trading_state_before=system_state["trading_state"],
+                trading_state_after=system_state["trading_state"],
+                live_armed_before=system_state["live_armed"],
+                live_armed_after=system_state["live_armed"],
+                strategy_version_before=system_state["active_strategy_version_id"],
+                strategy_version_after=system_state["active_strategy_version_id"],
+            )
 
+            return {
+                "decision_id": existing_decision["decision_id"],
+                "decision": existing_decision["decision"],
+                "executed": existing_decision["executed"],
+                "linked_order_id": existing_decision["linked_order_id"],
+                "position_id_after": existing_decision["position_id_after"],
+                "position_side_after": existing_decision["position_side_after"],
+                "last_trade_id": None,
+                "skipped": True,
+            }
+
+        if existing_decision["decision"] == decision_result["decision"]:
             retryable_decisions = {"ENTER_LONG", "ENTER_SHORT", "EXIT_HARD", "EXIT_WEAK"}
 
             if existing_decision["decision"] in retryable_decisions:
@@ -529,26 +530,27 @@ def record_runtime_decision(
                 }
         else:
             logger.info(
-                "同一根 bar 已有不同 decision，改找下一個可用 bar_close_time：existing_decision_id=%s, existing_decision=%s, existing_executed=%s, new_decision=%s",
+                "同一根 bar 已有不同且未執行 decision，覆蓋既有 decision：existing_decision_id=%s, old_decision=%s, new_decision=%s",
                 existing_decision["decision_id"],
                 existing_decision["decision"],
-                existing_decision["executed"],
                 decision_result["decision"],
             )
 
-        if not reuse_existing_decision:
-            while True:
-                decision_bar_open_time = decision_bar_open_time + timedelta(microseconds=1)
-                decision_bar_close_time = decision_bar_close_time + timedelta(microseconds=1)
+            update_decision_log(
+                conn,
+                decision_id=existing_decision["decision_id"],
+                decision=decision_result["decision"],
+                decision_score=float(decision_result["decision_score"]),
+                reason_code=decision_result["reason_code"],
+                reason_summary=decision_result["reason_summary"],
+                features=feature_pack,
+                position_id_before=system_state["current_position_id"],
+                position_side_before=system_state["current_position_side"],
+                position_side_after=system_state["current_position_side"],
+            )
 
-                shifted_decision = get_decision_by_bar_close_time(
-                    conn,
-                    symbol=settings.primary_symbol,
-                    interval=settings.primary_interval,
-                    bar_close_time=decision_bar_close_time,
-                )
-                if shifted_decision is None:
-                    break
+            decision_id = existing_decision["decision_id"]
+            reuse_existing_decision = True
 
     latest_previous_decision = get_latest_decision_by_symbol_interval(
         conn,
@@ -590,7 +592,7 @@ def record_runtime_decision(
                 "symbol": settings.primary_symbol,
                 "interval": settings.primary_interval,
                 "decision": decision_result["decision"],
-                "bar_close_time": decision_bar_close_time.isoformat(),
+                "bar_close_time": target_bar_close_time.isoformat(),
                 "position_id_before": system_state["current_position_id"],
                 "position_side_before": system_state["current_position_side"],
             },
@@ -667,36 +669,25 @@ def record_runtime_decision(
                 position_side_after = None
 
     elif decision_result["decision"] == "EXIT_WEAK":
-        previous_is_weak_exit = (
-            latest_previous_decision is not None
-            and latest_previous_decision["decision"] == "EXIT_WEAK"
-            and latest_previous_decision["position_side_before"] == system_state["current_position_side"]
-            and bool(latest_previous_decision["executed"]) is False
-            and latest_previous_decision["bar_close_time"] < target_bar_close_time
+        allow_exit, guard_reason = evaluate_exit_guard(
+            system_state,
+            open_position=open_position,
+            current_bar_close_time=target_bar_close_time,
+            min_hold_bars=min_hold_bars,
         )
 
-        if previous_is_weak_exit:
-            allow_exit, guard_reason = evaluate_exit_guard(
-                system_state,
-                open_position=open_position,
-                current_bar_close_time=target_bar_close_time,
-                min_hold_bars=min_hold_bars,
+        if allow_exit:
+            executed, linked_order_id, last_trade_id, guard_reason = execute_exit_flow(
+                conn,
+                settings=settings,
+                system_state=system_state,
+                active_strategy=active_strategy,
+                latest_kline=latest_kline,
+                decision_id=decision_id,
             )
-
-            if allow_exit:
-                executed, linked_order_id, last_trade_id, guard_reason = execute_exit_flow(
-                    conn,
-                    settings=settings,
-                    system_state=system_state,
-                    active_strategy=active_strategy,
-                    latest_kline=latest_kline,
-                    decision_id=decision_id,
-                )
-                if executed:
-                    position_id_after = None
-                    position_side_after = None
-        else:
-            guard_reason = "弱出場首次確認，先不平倉，等待下一根再次確認"
+            if executed:
+                position_id_after = None
+                position_side_after = None
 
     mark_decision_executed(
         conn,

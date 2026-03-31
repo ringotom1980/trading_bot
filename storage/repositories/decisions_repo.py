@@ -305,6 +305,53 @@ def get_latest_decision_by_symbol_interval(
         "linked_order_id": row[18],
         "created_at": row[19],
     }
+    
+    
+def update_decision_log(
+    conn: PgConnection,
+    *,
+    decision_id: int,
+    decision: str,
+    decision_score: float | None,
+    reason_code: str | None,
+    reason_summary: str | None,
+    features: dict[str, Any] | None,
+    position_id_before: int | None,
+    position_side_before: str | None,
+    position_side_after: str | None,
+) -> None:
+    """
+    功能：更新既有 decisions_log 的決策內容，避免同一根 bar 重複插入新資料。
+    """
+    sql = """
+    UPDATE decisions_log
+    SET
+        decision = %s,
+        decision_score = %s,
+        reason_code = %s,
+        reason_summary = %s,
+        features_json = %s::jsonb,
+        position_id_before = %s,
+        position_side_before = %s,
+        position_side_after = %s
+    WHERE decision_id = %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                decision,
+                decision_score,
+                reason_code,
+                reason_summary,
+                json.dumps(features, ensure_ascii=False) if features is not None else None,
+                position_id_before,
+                position_side_before,
+                position_side_after,
+                decision_id,
+            ),
+        )
 
 
 def mark_decision_executed(
