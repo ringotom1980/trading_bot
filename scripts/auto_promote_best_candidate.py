@@ -418,7 +418,7 @@ def main() -> None:
             interval=str(active_strategy["interval"]),
             feature_set=dict(active_strategy["feature_set_json"] or {}),
             params=selected_params,
-            backtest_summary=selected_validation_metrics,
+            backtest_summary=None,
             validation_summary=selected_validation_payload,
             promotion_score=float(selected_rank_score),
             note=f"auto promoted from candidate_id={best_candidate_id}",
@@ -449,7 +449,7 @@ def main() -> None:
                 "old_strategy_version_id": current_active_strategy_version_id,
                 "new_strategy_version_id": new_strategy_version_id,
                 "new_version_code": new_version_code,
-                "validation_metrics": selected_validation_metrics,
+                "validation_summary": selected_validation_payload,
                 "promotion_score": float(selected_rank_score),
                 "validation_source_mode": selected_source_mode,
                 "walk_forward_score": selected_walk_forward_score,
@@ -475,7 +475,7 @@ def main() -> None:
     print(f"new_version_code={new_version_code}")
     print(f"validation_source_mode={selected_source_mode}")
     print(f"walk_forward_score={selected_walk_forward_score}")
-    print("validation_metrics=" + json.dumps(selected_validation_metrics, ensure_ascii=False, sort_keys=True))
+    print("validation_summary=" + json.dumps(selected_validation_payload, ensure_ascii=False, sort_keys=True))
     
 if __name__ == "__main__":
     main()
