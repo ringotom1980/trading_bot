@@ -26,16 +26,16 @@ def calculate_candidate_score(metrics: dict[str, Any]) -> float:
     total_trades = int(metrics.get("total_trades", 0))
     win_rate = float(metrics.get("win_rate", 0.0))
 
-    low_trade_penalty = 0.0 if total_trades >= 12 else (12 - total_trades) * 1.8
-    trade_count_bonus = min(total_trades, 45) * 0.06
+    low_trade_penalty = 0.0 if total_trades >= 15 else (15 - total_trades) * 2.0
+    trade_count_bonus = min(total_trades, 60) * 0.08
 
     overtrade_penalty = 0.0
-    if total_trades > 60:
-        overtrade_penalty = (total_trades - 60) * 0.45
+    if total_trades > 80:
+        overtrade_penalty = (total_trades - 80) * 0.18
 
     low_pf_penalty = 0.0
-    if profit_factor < 1.40:
-        low_pf_penalty = (1.40 - profit_factor) * 18.0
+    if profit_factor < 1.15:
+        low_pf_penalty = (1.15 - profit_factor) * 10.0
 
     score = (
         net_pnl * 0.50
