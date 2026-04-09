@@ -28,6 +28,7 @@ from storage.repositories.strategy_candidates_repo import (
 from storage.repositories.strategy_versions_repo import (
     create_evolved_strategy_version,
     get_active_strategy_version,
+    get_strategy_version_by_code,
     retire_active_strategy,
 )
 from storage.repositories.system_state_repo import (
@@ -111,6 +112,7 @@ def main() -> None:
     parser.add_argument("--top-limit", type=int, default=10)
     parser.add_argument("--window-days", type=int, default=5, help="walk-forward window 天數")
     parser.add_argument("--step-days", type=int, default=3, help="walk-forward step 天數")
+    parser.add_argument("--version-code", type=str, default=None, help="指定 candidate 所屬的 source strategy version_code")
     args = parser.parse_args()
     
     if args.window_days <= 0:
@@ -126,15 +128,23 @@ def main() -> None:
         raise ValueError("start-date 必須早於 end-date")
 
     with connection_scope() as conn:
-        active_strategy = get_active_strategy_version(conn)
-        if active_strategy is None:
+        current_active_strategy = get_active_strategy_version(conn)
+        if current_active_strategy is None:
             raise RuntimeError("找不到 ACTIVE 策略版本")
+
+        if args.version_code:
+            active_strategy = get_strategy_version_by_code(conn, args.version_code)
+            if active_strategy is None:
+                raise RuntimeError(f"找不到策略版本：{args.version_code}")
+        else:
+            active_strategy = current_active_strategy
 
         system_state = get_system_state(conn, 1)
         if system_state is None:
             raise RuntimeError("找不到 system_state(id=1)")
 
         active_strategy_version_id = int(active_strategy["strategy_version_id"])
+        current_active_strategy_version_id = int(current_active_strategy["strategy_version_id"])
 
         if system_state["current_position_id"] is not None:
             create_system_event(
@@ -356,7 +366,7 @@ def main() -> None:
 
         new_strategy_version_id = create_evolved_strategy_version(
             conn,
-            base_version_id=active_strategy_version_id,
+            base_version_id=current_active_strategy_version_id,
             version_code=new_version_code,
             symbol=str(active_strategy["symbol"]),
             interval=str(active_strategy["interval"]),
@@ -390,7 +400,7 @@ def main() -> None:
             message="auto promote 完成",
             details={
                 "candidate_id": best_candidate_id,
-                "old_strategy_version_id": active_strategy_version_id,
+                "old_strategy_version_id": current_active_strategy_version_id,
                 "new_strategy_version_id": new_strategy_version_id,
                 "new_version_code": new_version_code,
                 "validation_metrics": selected_validation_metrics,
@@ -409,7 +419,7 @@ def main() -> None:
             trading_state_after=system_state["trading_state"],
             live_armed_before=system_state["live_armed"],
             live_armed_after=system_state["live_armed"],
-            strategy_version_before=active_strategy_version_id,
+            strategy_version_before=current_active_strategy_version_id,
             strategy_version_after=new_strategy_version_id,
         )
 
