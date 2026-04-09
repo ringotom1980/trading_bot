@@ -89,10 +89,12 @@ def main() -> None:
     print(f"validation_end={ranges['validation_end']}", flush=True)
     print("", flush=True)
 
-    # Step 1: sync historical data
+    # Step 1: sync historical data for whole train + validation range
     _run([
         PYTHON_BIN,
         str(ROOT_DIR / "scripts" / "sync_historical_klines.py"),
+        "--start-date", ranges["train_start"],
+        "--end-date", ranges["validation_end"],
     ])
 
     # Step 2: train range candidate search + save

@@ -1,12 +1,13 @@
 """
 Path: scripts/sync_historical_klines.py
-說明：每日同步 historical_klines，用最近 2 天區間向 Binance 抓 15m K 線後寫入 DB。
+說明：同步 historical_klines，可指定日期區間；未指定時預設抓最近 2 天。
 """
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import argparse
 import sys
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -30,16 +31,34 @@ def _utc_day_start(dt: datetime) -> datetime:
     return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
 
 
+def _parse_date_to_utc_start(date_text: str) -> datetime:
+    dt = datetime.strptime(date_text, "%Y-%m-%d")
+    return datetime(dt.year, dt.month, dt.day, tzinfo=timezone.utc)
+
+
 def main() -> None:
+    parser = argparse.ArgumentParser(description="Sync historical klines")
+    parser.add_argument("--start-date", type=str, default=None, help="UTC start date, format YYYY-MM-DD")
+    parser.add_argument("--end-date", type=str, default=None, help="UTC end date, format YYYY-MM-DD")
+    args = parser.parse_args()
+
     settings = load_settings()
     client = BinanceClient(settings)
 
-    now_utc = datetime.now(tz=timezone.utc)
-    today_utc_start = _utc_day_start(now_utc)
+    if args.start_date and args.end_date:
+        start_time = _parse_date_to_utc_start(args.start_date)
+        end_time = _parse_date_to_utc_start(args.end_date)
+        if start_time >= end_time:
+            raise ValueError("--start-date 必須早於 --end-date")
+    elif args.start_date or args.end_date:
+        raise ValueError("--start-date 與 --end-date 必須一起帶")
+    else:
+        now_utc = datetime.now(tz=timezone.utc)
+        today_utc_start = _utc_day_start(now_utc)
 
-    # 每天跑一次，但抓最近 2 天，增加容錯與補洞能力
-    start_time = today_utc_start - timedelta(days=2)
-    end_time = today_utc_start
+        # 預設抓最近 2 天
+        start_time = today_utc_start - timedelta(days=2)
+        end_time = today_utc_start
 
     rows = fetch_klines_range_all(
         client,
