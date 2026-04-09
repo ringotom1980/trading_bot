@@ -105,6 +105,18 @@ def _is_matching_validation_range(
     )
 
 
+def _candidate_already_promoted(candidate: dict[str, Any]) -> bool:
+    candidate_status = str(candidate.get("candidate_status") or "").upper()
+    if candidate_status == "APPROVED":
+        return True
+
+    note = str(candidate.get("note") or "")
+    if "auto promoted to strategy_version_id=" in note:
+        return True
+
+    return False
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Auto promote best validated candidate")
     parser.add_argument("--start-date", type=str, required=True, help="validation start YYYY-MM-DD")
@@ -230,6 +242,9 @@ def main() -> None:
             candidate_id = int(candidate["candidate_id"])
             candidate_params = dict(candidate["params_json"] or {})
             candidate_rank_score = float(candidate["rank_score"])
+            
+            if _candidate_already_promoted(candidate):
+                continue
 
             if _params_equal(candidate_params, active_params):
                 update_strategy_candidate_status(
@@ -323,6 +338,37 @@ def main() -> None:
             selected_params = dict(chosen["candidate_params"])
             selected_source_mode = "single_range"
             selected_walk_forward_score = None
+            
+        current_active_params = dict(current_active_strategy["params_json"] or {})
+
+        if selected_params and _params_equal(selected_params, current_active_params):
+            create_system_event(
+                conn,
+                event_type="GUARD_TRIGGERED",
+                event_level="INFO",
+                source="SYSTEM",
+                message="auto promote 中止：candidate params 與目前 ACTIVE 相同",
+                details={
+                    "candidate_id": best_candidate_id,
+                    "active_strategy_version_id": current_active_strategy_version_id,
+                    "validation_range_start": start_time.isoformat(),
+                    "validation_range_end": end_time.isoformat(),
+                    "validation_source_mode": selected_source_mode,
+                },
+                created_by="auto_promote_best_candidate",
+                engine_mode_before=system_state["engine_mode"],
+                engine_mode_after=system_state["engine_mode"],
+                trade_mode_before=system_state["trade_mode"],
+                trade_mode_after=system_state["trade_mode"],
+                trading_state_before=system_state["trading_state"],
+                trading_state_after=system_state["trading_state"],
+                live_armed_before=system_state["live_armed"],
+                live_armed_after=system_state["live_armed"],
+                strategy_version_before=current_active_strategy_version_id,
+                strategy_version_after=current_active_strategy_version_id,
+            )
+            print("auto promote 中止：candidate params 與目前 ACTIVE 相同")
+            return
 
         if best_candidate is None or best_candidate_id is None or selected_rank_score is None:
             create_system_event(
