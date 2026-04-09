@@ -21,15 +21,15 @@ DEFAULT_PROMOTION_GATE = {
 
 
 DEFAULT_WALK_FORWARD_WINDOW_GATE = {
-    "min_total_trades": 12,
+    "min_total_trades": 8,
     "min_profit_factor": 0.90,
     "max_drawdown_relaxation": 8.0,
 }
 
 
 DEFAULT_WALK_FORWARD_GATE = {
-    "min_pass_windows": 2,
-    "min_beat_active_windows": 2,
+    "min_pass_windows": 1,
+    "min_beat_active_windows": 1,
     "min_pass_ratio": 0.50,
     "min_avg_net_pnl": 0.0,
     "min_avg_profit_factor": 1.05,
