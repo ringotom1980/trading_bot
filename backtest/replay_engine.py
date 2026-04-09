@@ -60,6 +60,30 @@ def _calc_return_pct(*, side: str, entry_price: float, current_price: float) -> 
     raise ValueError(f"不支援的 side：{side}")
 
 
+def _apply_entry_slippage(*, side: str, price: float, slippage_rate: float) -> float:
+    """
+    功能：模擬進場滑價。
+    LONG 進場視為買貴一點；SHORT 進場視為賣低一點。
+    """
+    if side == "LONG":
+        return price * (1 + slippage_rate)
+    if side == "SHORT":
+        return price * (1 - slippage_rate)
+    raise ValueError(f"不支援的 side：{side}")
+
+
+def _apply_exit_slippage(*, side: str, price: float, slippage_rate: float) -> float:
+    """
+    功能：模擬出場滑價。
+    LONG 出場視為賣差一點；SHORT 出場視為買貴一點。
+    """
+    if side == "LONG":
+        return price * (1 - slippage_rate)
+    if side == "SHORT":
+        return price * (1 + slippage_rate)
+    raise ValueError(f"不支援的 side：{side}")
+
+
 def run_backtest_replay(
     *,
     klines: list[dict[str, Any]],
@@ -81,6 +105,7 @@ def run_backtest_replay(
 
     qty = float(params.get("qty", 0.01))
     fee_rate = float(params.get("fee_rate", 0.0004))
+    slippage_rate = float(params.get("slippage_rate", 0.0005))
     warmup_bars = int(params.get("warmup_bars", 60))
     cooldown_bars = int(params.get("cooldown_bars", 0))
     min_hold_bars = int(params.get("min_hold_bars", 0))
@@ -119,6 +144,8 @@ def run_backtest_replay(
         )
 
         close_price = float(latest["close"])
+        high_price = float(latest["high"])
+        low_price = float(latest["low"])
         close_time = latest["close_time"]
 
         effective_decision = decision_result["decision"]
@@ -133,17 +160,33 @@ def run_backtest_replay(
 
         else:
             bars_held = idx - int(current_position["entry_bar_index"])
-            current_return_pct = _calc_return_pct(
-                side=str(current_position["side"]),
-                entry_price=float(current_position["entry_price"]),
-                current_price=close_price,
-            )
+            position_side = str(current_position["side"])
+            entry_price = float(current_position["entry_price"])
 
-            if hard_stop_loss_pct > 0 and current_return_pct <= -hard_stop_loss_pct:
+            stop_loss_hit = False
+            take_profit_hit = False
+
+            if position_side == "LONG":
+                if hard_stop_loss_pct > 0:
+                    stop_loss_price = entry_price * (1 - hard_stop_loss_pct)
+                    stop_loss_hit = low_price <= stop_loss_price
+                if take_profit_pct > 0:
+                    take_profit_price = entry_price * (1 + take_profit_pct)
+                    take_profit_hit = high_price >= take_profit_price
+
+            elif position_side == "SHORT":
+                if hard_stop_loss_pct > 0:
+                    stop_loss_price = entry_price * (1 + hard_stop_loss_pct)
+                    stop_loss_hit = high_price >= stop_loss_price
+                if take_profit_pct > 0:
+                    take_profit_price = entry_price * (1 - take_profit_pct)
+                    take_profit_hit = low_price <= take_profit_price
+
+            if stop_loss_hit:
                 effective_decision = "EXIT"
                 effective_reason = "HARD_STOP_LOSS"
 
-            elif take_profit_pct > 0 and current_return_pct >= take_profit_pct:
+            elif take_profit_hit:
                 effective_decision = "EXIT"
                 effective_reason = "TAKE_PROFIT"
 
@@ -167,13 +210,18 @@ def run_backtest_replay(
 
         if current_position is None:
             if effective_decision == "ENTER_LONG":
-                entry_fee = close_price * qty * fee_rate
+                entry_price = _apply_entry_slippage(
+                    side="LONG",
+                    price=close_price,
+                    slippage_rate=slippage_rate,
+                )
+                entry_fee = entry_price * qty * fee_rate
                 current_position = {
                     "strategy_version_id": strategy_version_id,
                     "symbol": symbol,
                     "interval": interval,
                     "side": "LONG",
-                    "entry_price": close_price,
+                    "entry_price": entry_price,
                     "entry_qty": qty,
                     "entry_time": close_time,
                     "entry_bar_index": idx,
@@ -182,13 +230,18 @@ def run_backtest_replay(
                 }
 
             elif effective_decision == "ENTER_SHORT":
-                entry_fee = close_price * qty * fee_rate
+                entry_price = _apply_entry_slippage(
+                    side="SHORT",
+                    price=close_price,
+                    slippage_rate=slippage_rate,
+                )
+                entry_fee = entry_price * qty * fee_rate
                 current_position = {
                     "strategy_version_id": strategy_version_id,
                     "symbol": symbol,
                     "interval": interval,
                     "side": "SHORT",
-                    "entry_price": close_price,
+                    "entry_price": entry_price,
                     "entry_qty": qty,
                     "entry_time": close_time,
                     "entry_bar_index": idx,
@@ -198,13 +251,18 @@ def run_backtest_replay(
 
         else:
             if effective_decision == "EXIT":
+                exit_price = _apply_exit_slippage(
+                    side=str(current_position["side"]),
+                    price=close_price,
+                    slippage_rate=slippage_rate,
+                )
                 gross_pnl = _calc_pnl(
                     side=current_position["side"],
                     entry_price=float(current_position["entry_price"]),
-                    exit_price=close_price,
+                    exit_price=exit_price,
                     qty=qty,
                 )
-                exit_fee = close_price * qty * fee_rate
+                exit_fee = exit_price * qty * fee_rate
                 fees = float(current_position["entry_fee"]) + exit_fee
                 net_pnl = gross_pnl - fees
                 bars_held = idx - int(current_position["entry_bar_index"])
@@ -217,7 +275,7 @@ def run_backtest_replay(
                     "entry_time": current_position["entry_time"],
                     "exit_time": close_time,
                     "entry_price": float(current_position["entry_price"]),
-                    "exit_price": close_price,
+                    "exit_price": exit_price,
                     "qty": qty,
                     "gross_pnl": gross_pnl,
                     "fees": fees,
@@ -231,6 +289,48 @@ def run_backtest_replay(
                 equity_curve.append(equity)
                 current_position = None
                 last_exit_bar_index = idx
+
+    if current_position is not None:
+        last_bar = klines[-1]
+        final_close_price = float(last_bar["close"])
+        final_close_time = last_bar["close_time"]
+        final_exit_price = _apply_exit_slippage(
+            side=str(current_position["side"]),
+            price=final_close_price,
+            slippage_rate=slippage_rate,
+        )
+
+        gross_pnl = _calc_pnl(
+            side=current_position["side"],
+            entry_price=float(current_position["entry_price"]),
+            exit_price=final_exit_price,
+            qty=qty,
+        )
+        exit_fee = final_exit_price * qty * fee_rate
+        fees = float(current_position["entry_fee"]) + exit_fee
+        net_pnl = gross_pnl - fees
+        bars_held = (len(klines) - 1) - int(current_position["entry_bar_index"])
+
+        trade = {
+            "strategy_version_id": strategy_version_id,
+            "symbol": symbol,
+            "interval": interval,
+            "side": current_position["side"],
+            "entry_time": current_position["entry_time"],
+            "exit_time": final_close_time,
+            "entry_price": float(current_position["entry_price"]),
+            "exit_price": final_exit_price,
+            "qty": qty,
+            "gross_pnl": gross_pnl,
+            "fees": fees,
+            "net_pnl": net_pnl,
+            "bars_held": bars_held,
+            "exit_reason": "FORCED_END_OF_BACKTEST",
+        }
+        trades.append(trade)
+
+        equity += net_pnl
+        equity_curve.append(equity)
 
     return {
         "symbol": symbol,
