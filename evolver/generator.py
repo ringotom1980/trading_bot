@@ -14,7 +14,7 @@ from strategy.signals import DEFAULT_WEIGHTS
 
 
 THRESHOLD_FIELD_SPECS: dict[str, tuple[list[float], int]] = {
-    "entry_threshold": ([-0.08, -0.05, 0.05, 0.08], 4),
+    "entry_threshold": ([-0.12, -0.08, -0.05, 0.03, 0.05], 4),
     "exit_threshold": ([-0.08, -0.05, 0.05, 0.08], 4),
     "reverse_threshold": ([-0.08, -0.05, 0.05, 0.08], 4),
     "reverse_gap": ([-0.04, -0.02, 0.02, 0.04], 4),
@@ -270,11 +270,19 @@ PROFILE_TEMPLATES: list[dict[str, Any]] = [
         },
     },
     {
-        "name": "entry_tight",
+        "name": "entry_balanced",
         "overrides": {
-            "entry_threshold": 0.60,
-            "reverse_threshold": 0.72,
-            "reverse_gap": 0.14,
+            "entry_threshold": 0.54,
+            "reverse_threshold": 0.66,
+            "reverse_gap": 0.10,
+        },
+    },
+    {
+        "name": "entry_loose_balanced",
+        "overrides": {
+            "entry_threshold": 0.50,
+            "reverse_threshold": 0.64,
+            "reverse_gap": 0.09,
         },
     },
 ]
@@ -607,7 +615,17 @@ def generate_param_candidates(
         candidates.append(params)
 
     selected_threshold_variants = threshold_variants[:16]
-    selected_weight_variants = weight_variants[1:9]
+    selected_weight_variants = [
+        p for p in weight_variants[1:]
+        if str(p.get("mutation_tag")) in {
+            "trend_up",
+            "momentum_up",
+            "volume_up",
+            "volume_momentum_combo",
+            "long_trend_short_momentum",
+            "long_momentum_short_trend",
+        }
+    ]
     selected_profile_variants = profile_variants[:6]
 
     # threshold + weight
