@@ -13,6 +13,21 @@ from typing import Any
 from strategy.decision import calculate_decision
 from strategy.features import calculate_feature_pack
 from strategy.signals import calculate_signal_scores
+DIAGNOSTIC_FEATURE_KEYS = [
+    "rsi_14",
+    "macd_hist",
+    "kd_diff",
+    "close_vs_sma20_pct",
+    "close_vs_sma60_pct",
+    "slope_5",
+    "slope_10",
+    "atr_14_pct",
+    "volatility_10",
+    "volume_ratio_20",
+    "volume_slope_5",
+    "regime",
+    "regime_score",
+]
 
 
 def _calc_pnl(
@@ -137,6 +152,19 @@ def _resolve_risk_exit_price(
         return "TAKE_PROFIT", take_profit_price
 
     return None, None
+
+
+def _build_entry_feature_snapshot(feature_pack: dict[str, Any]) -> dict[str, Any]:
+    """
+    功能：抽取進場當下的核心特徵快照，供回測診斷使用。
+    """
+    snapshot: dict[str, Any] = {}
+
+    for key in DIAGNOSTIC_FEATURE_KEYS:
+        if key in feature_pack:
+            snapshot[key] = feature_pack[key]
+
+    return snapshot
 
 
 def run_backtest_replay(
@@ -269,6 +297,10 @@ def run_backtest_replay(
                     "entry_bar_index": idx,
                     "entry_fee": entry_fee,
                     "entry_decision": effective_decision,
+                    "entry_reason_code": effective_reason,
+                    "entry_long_score": float(signal_scores["long_score"]),
+                    "entry_short_score": float(signal_scores["short_score"]),
+                    "entry_feature_snapshot": _build_entry_feature_snapshot(feature_pack),
                 }
 
             elif effective_decision == "ENTER_SHORT":
@@ -289,6 +321,10 @@ def run_backtest_replay(
                     "entry_bar_index": idx,
                     "entry_fee": entry_fee,
                     "entry_decision": effective_decision,
+                    "entry_reason_code": effective_reason,
+                    "entry_long_score": float(signal_scores["long_score"]),
+                    "entry_short_score": float(signal_scores["short_score"]),
+                    "entry_feature_snapshot": _build_entry_feature_snapshot(feature_pack),
                 }
 
         else:
@@ -326,6 +362,11 @@ def run_backtest_replay(
                     "fees": fees,
                     "net_pnl": net_pnl,
                     "bars_held": bars_held,
+                    "entry_decision": current_position.get("entry_decision"),
+                    "entry_reason_code": current_position.get("entry_reason_code"),
+                    "entry_long_score": current_position.get("entry_long_score"),
+                    "entry_short_score": current_position.get("entry_short_score"),
+                    "entry_feature_snapshot": dict(current_position.get("entry_feature_snapshot") or {}),
                     "exit_reason": effective_reason,
                 }
                 trades.append(trade)
@@ -372,6 +413,11 @@ def run_backtest_replay(
             "fees": fees,
             "net_pnl": net_pnl,
             "bars_held": bars_held,
+            "entry_decision": current_position.get("entry_decision"),
+            "entry_reason_code": current_position.get("entry_reason_code"),
+            "entry_long_score": current_position.get("entry_long_score"),
+            "entry_short_score": current_position.get("entry_short_score"),
+            "entry_feature_snapshot": dict(current_position.get("entry_feature_snapshot") or {}),
             "exit_reason": "FORCED_END_OF_BACKTEST",
         }
         trades.append(trade)
