@@ -181,6 +181,22 @@ def _apply_family_diversity_cap(
     return selected
 
 
+def _summarize_reject_reasons(results: list[dict[str, object]]) -> dict[str, int]:
+    """
+    功能：統計未通過 gate 的 reject_reason 數量。
+    """
+    summary: dict[str, int] = {}
+
+    for row in results:
+        if bool(row.get("is_qualified")):
+            continue
+
+        reason = str(row.get("reject_reason") or "UNKNOWN")
+        summary[reason] = summary.get(reason, 0) + 1
+
+    return dict(sorted(summary.items(), key=lambda item: (-item[1], item[0])))
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run candidate search v3")
     parser.add_argument("--symbol", type=str, default=None, help="例如 BTCUSDT")
@@ -288,6 +304,7 @@ def main() -> None:
             )
 
     qualified_results = [row for row in raw_results if bool(row["is_qualified"])]
+    reject_reason_summary = _summarize_reject_reasons(raw_results)
     deduped_results = _dedupe_results_by_behavior(qualified_results)
     deduped_results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
     diversified_results = _apply_family_diversity_cap(
@@ -311,8 +328,44 @@ def main() -> None:
     print(f"elapsed={_format_elapsed(time.time() - started_at)}")
     print("")
 
+    print("reject_reason_summary:")
+    if reject_reason_summary:
+        for reason, count in reject_reason_summary.items():
+            print(f"  {reason}={count}")
+    else:
+        print("  NONE")
+    print("")
+
     if not diversified_results:
         print("無合格 candidate（全部未通過 gate）")
+
+        closest_results = sorted(
+            raw_results,
+            key=lambda item: float(item["rank_score"]),
+            reverse=True,
+        )[:5]
+
+        print("")
+        print("closest_candidates:")
+        for idx, item in enumerate(closest_results, start=1):
+            metrics = dict(item["metrics"])
+            params = dict(item["params"])
+
+            print(f"----- CLOSEST {idx} -----")
+            print(f"candidate_no={item['candidate_no']}")
+            print(f"rank_score={float(item['rank_score']):.8f}")
+            print(f"reject_reason={item.get('reject_reason')}")
+            print(f"net_pnl={float(metrics.get('net_pnl', 0.0)):.8f}")
+            print(f"profit_factor={float(metrics.get('profit_factor', 0.0)):.8f}")
+            print(f"max_drawdown={float(metrics.get('max_drawdown', 0.0)):.8f}")
+            print(f"total_trades={int(metrics.get('total_trades', 0))}")
+            print(f"win_rate={float(metrics.get('win_rate', 0.0)):.4f}")
+            print(f"mutation_tag={params.get('mutation_tag')}")
+            print(f"family_tag={_extract_family_tag(params)}")
+            _print_weight_summary(params)
+            print("params=" + json.dumps(params, ensure_ascii=False, sort_keys=True))
+            print("")
+
         return
 
     top_n = min(args.top, len(diversified_results))
