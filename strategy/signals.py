@@ -10,32 +10,32 @@ from typing import Any
 
 DEFAULT_WEIGHTS = {
     "long": {
-        "rsi_14": 0.10,
-        "macd_hist": 0.14,
+        "rsi_14": 0.08,
+        "macd_hist": 0.16,
         "kd_diff": 0.08,
-        "close_vs_sma20_pct": 0.12,
-        "close_vs_sma60_pct": 0.12,
-        "slope_5": 0.10,
+        "close_vs_sma20_pct": 0.13,
+        "close_vs_sma60_pct": 0.13,
+        "slope_5": 0.09,
         "slope_10": 0.10,
-        "atr_14_pct": -0.05,
-        "volatility_10": -0.04,
-        "volume_ratio_20": 0.07,
-        "volume_slope_5": 0.04,
-        "regime_score": 0.12,
+        "atr_14_pct": -0.04,
+        "volatility_10": -0.03,
+        "volume_ratio_20": 0.08,
+        "volume_slope_5": 0.03,
+        "regime_score": 0.15,
     },
     "short": {
-        "rsi_14": 0.10,
-        "macd_hist": 0.14,
+        "rsi_14": 0.08,
+        "macd_hist": 0.16,
         "kd_diff": 0.08,
-        "close_vs_sma20_pct": 0.12,
-        "close_vs_sma60_pct": 0.12,
-        "slope_5": 0.10,
+        "close_vs_sma20_pct": 0.13,
+        "close_vs_sma60_pct": 0.13,
+        "slope_5": 0.09,
         "slope_10": 0.10,
-        "atr_14_pct": -0.05,
-        "volatility_10": -0.04,
-        "volume_ratio_20": 0.07,
-        "volume_slope_5": 0.04,
-        "regime_score": 0.12,
+        "atr_14_pct": -0.04,
+        "volatility_10": -0.03,
+        "volume_ratio_20": 0.08,
+        "volume_slope_5": 0.03,
+        "regime_score": 0.15,
     },
 }
 
@@ -58,18 +58,76 @@ def _score_negative_ratio(value: float, scale: float) -> float:
     return _clamp(normalized)
 
 
+def _score_centered_band(value: float, low: float, high: float, tolerance: float) -> float:
+    """
+    功能：分數最高落在 [low, high] 區間，越偏離越扣分。
+    """
+    if low > high:
+        low, high = high, low
+
+    if low <= value <= high:
+        return 1.0
+
+    if value < low:
+        distance = low - value
+    else:
+        distance = value - high
+
+    if tolerance <= 0:
+        return 0.5
+
+    return _clamp(1.0 - distance / tolerance)
+
+
+def _score_binary_bias(condition: bool, true_score: float = 1.0, false_score: float = 0.0) -> float:
+    return true_score if condition else false_score
+
+
 def _score_rsi_long(value: float) -> float:
-    # RSI 偏多但避免過熱，50~65 較佳
-    if value <= 50:
-        return _score_positive_ratio(value - 50.0, 20.0)
-    return _score_negative_ratio(value - 65.0, 35.0)
+    # 多方較佳區間：48 ~ 62，太高視為過熱，太低代表動能不足
+    return _score_centered_band(value=value, low=48.0, high=62.0, tolerance=22.0)
 
 
 def _score_rsi_short(value: float) -> float:
-    # RSI 偏空但避免過冷，35~50 較佳
-    if value >= 50:
-        return _score_negative_ratio(value - 50.0, 20.0)
-    return _score_positive_ratio(35.0 - value, 35.0)
+    # 空方較佳區間：38 ~ 52，太低視為過冷，太高代表空方動能不足
+    return _score_centered_band(value=value, low=38.0, high=52.0, tolerance=22.0)
+
+
+def _score_volume_ratio(value: float) -> float:
+    """
+    功能：量比明顯大於 1 才真正加分。
+    """
+    if value <= 0.90:
+        return 0.15
+    if value <= 1.00:
+        return 0.35
+    if value <= 1.10:
+        return 0.55
+    if value <= 1.30:
+        return 0.75
+    if value <= 1.60:
+        return 0.90
+    return 1.0
+
+
+def _score_regime_long(regime_score: float) -> float:
+    if regime_score >= 1.0:
+        return 1.0
+    if regime_score >= 0.5:
+        return 0.75
+    if regime_score > -0.5:
+        return 0.40
+    return 0.10
+
+
+def _score_regime_short(regime_score: float) -> float:
+    if regime_score <= -1.0:
+        return 1.0
+    if regime_score <= -0.5:
+        return 0.75
+    if regime_score < 0.5:
+        return 0.40
+    return 0.10
 
 
 def _build_component_scores(feature_pack: dict[str, Any]) -> tuple[dict[str, float], dict[str, float]]:
@@ -89,32 +147,32 @@ def _build_component_scores(feature_pack: dict[str, Any]) -> tuple[dict[str, flo
 
     long_components = {
         "rsi_14": _score_rsi_long(rsi_14),
-        "macd_hist": _score_positive_ratio(macd_hist, scale=150.0),
-        "kd_diff": _score_positive_ratio(kd_diff, scale=20.0),
-        "close_vs_sma20_pct": _score_positive_ratio(close_vs_sma20_pct, scale=0.03),
-        "close_vs_sma60_pct": _score_positive_ratio(close_vs_sma60_pct, scale=0.05),
-        "slope_5": _score_positive_ratio(slope_5, scale=300.0),
-        "slope_10": _score_positive_ratio(slope_10, scale=500.0),
-        "atr_14_pct": _score_negative_ratio(atr_14_pct, scale=0.03),
-        "volatility_10": _score_negative_ratio(volatility_10, scale=0.03),
-        "volume_ratio_20": _score_positive_ratio(volume_ratio_20 - 1.0, scale=1.0),
-        "volume_slope_5": _score_positive_ratio(volume_slope_5, scale=20000.0),
-        "regime_score": _score_positive_ratio(regime_score, scale=1.0),
+        "macd_hist": _score_positive_ratio(macd_hist, scale=60.0),
+        "kd_diff": _score_positive_ratio(kd_diff, scale=12.0),
+        "close_vs_sma20_pct": _score_positive_ratio(close_vs_sma20_pct, scale=0.02),
+        "close_vs_sma60_pct": _score_positive_ratio(close_vs_sma60_pct, scale=0.035),
+        "slope_5": _score_positive_ratio(slope_5, scale=120.0),
+        "slope_10": _score_positive_ratio(slope_10, scale=180.0),
+        "atr_14_pct": _score_negative_ratio(atr_14_pct, scale=0.015),
+        "volatility_10": _score_negative_ratio(volatility_10, scale=0.012),
+        "volume_ratio_20": _score_volume_ratio(volume_ratio_20),
+        "volume_slope_5": _score_positive_ratio(volume_slope_5, scale=4000.0),
+        "regime_score": _score_regime_long(regime_score),
     }
 
     short_components = {
         "rsi_14": _score_rsi_short(rsi_14),
-        "macd_hist": _score_negative_ratio(macd_hist, scale=150.0),
-        "kd_diff": _score_negative_ratio(kd_diff, scale=20.0),
-        "close_vs_sma20_pct": _score_negative_ratio(close_vs_sma20_pct, scale=0.03),
-        "close_vs_sma60_pct": _score_negative_ratio(close_vs_sma60_pct, scale=0.05),
-        "slope_5": _score_negative_ratio(slope_5, scale=300.0),
-        "slope_10": _score_negative_ratio(slope_10, scale=500.0),
-        "atr_14_pct": _score_negative_ratio(atr_14_pct, scale=0.03),
-        "volatility_10": _score_negative_ratio(volatility_10, scale=0.03),
-        "volume_ratio_20": _score_positive_ratio(volume_ratio_20 - 1.0, scale=1.0),
-        "volume_slope_5": _score_negative_ratio(volume_slope_5, scale=20000.0),
-        "regime_score": _score_negative_ratio(regime_score, scale=1.0),
+        "macd_hist": _score_negative_ratio(macd_hist, scale=60.0),
+        "kd_diff": _score_negative_ratio(kd_diff, scale=12.0),
+        "close_vs_sma20_pct": _score_negative_ratio(close_vs_sma20_pct, scale=0.02),
+        "close_vs_sma60_pct": _score_negative_ratio(close_vs_sma60_pct, scale=0.035),
+        "slope_5": _score_negative_ratio(slope_5, scale=120.0),
+        "slope_10": _score_negative_ratio(slope_10, scale=180.0),
+        "atr_14_pct": _score_negative_ratio(atr_14_pct, scale=0.015),
+        "volatility_10": _score_negative_ratio(volatility_10, scale=0.012),
+        "volume_ratio_20": _score_volume_ratio(volume_ratio_20),
+        "volume_slope_5": _score_negative_ratio(volume_slope_5, scale=4000.0),
+        "regime_score": _score_regime_short(regime_score),
     }
 
     return long_components, short_components
