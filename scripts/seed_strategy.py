@@ -127,15 +127,15 @@ def seed_initial_strategy() -> None:
             strategy_version_id = create_strategy_version(
                 conn=conn,
                 version_code=version_code,
-                status="ACTIVE",
+                status="RETIRED",
                 source_type="MANUAL",
                 symbol=settings.primary_symbol,
                 interval=settings.primary_interval,
                 feature_set=build_initial_feature_set(),
                 params=build_initial_params(),
-                note="第二版初始 ACTIVE 策略",
+                note="第二版 base search seed 策略",
             )
-            logger.info("已建立初始策略：version_code=%s, strategy_version_id=%s", version_code, strategy_version_id)
+            logger.info("已建立 base search seed 策略：version_code=%s, strategy_version_id=%s", version_code, strategy_version_id)
         else:
             strategy_version_id = int(existing_strategy["strategy_version_id"])
             logger.info("初始策略已存在，略過建立：version_code=%s, strategy_version_id=%s", version_code, strategy_version_id)
