@@ -181,6 +181,38 @@ def _apply_family_diversity_cap(
     return selected
 
 
+def _print_feature_diagnostics(metrics: dict[str, Any]) -> None:
+    diagnostics = dict(metrics.get("feature_diagnostics") or {})
+    winners = dict(diagnostics.get("winners") or {})
+    losers = dict(diagnostics.get("losers") or {})
+    feature_delta = dict(diagnostics.get("feature_delta") or {})
+
+    print("feature_diagnostics:")
+
+    print(f"  winners_count={int(winners.get('count', 0))}")
+    print(f"  losers_count={int(losers.get('count', 0))}")
+    print(f"  winners_avg_net_pnl={float(winners.get('avg_net_pnl', 0.0)):.8f}")
+    print(f"  losers_avg_net_pnl={float(losers.get('avg_net_pnl', 0.0)):.8f}")
+    print(f"  winners_avg_bars_held={float(winners.get('avg_bars_held', 0.0)):.4f}")
+    print(f"  losers_avg_bars_held={float(losers.get('avg_bars_held', 0.0)):.4f}")
+    print(f"  winners_avg_entry_long_score={float(winners.get('avg_entry_long_score', 0.0)):.8f}")
+    print(f"  losers_avg_entry_long_score={float(losers.get('avg_entry_long_score', 0.0)):.8f}")
+    print(f"  winners_avg_entry_short_score={float(winners.get('avg_entry_short_score', 0.0)):.8f}")
+    print(f"  losers_avg_entry_short_score={float(losers.get('avg_entry_short_score', 0.0)):.8f}")
+
+    print("  feature_delta_top:")
+    ordered = sorted(
+        feature_delta.items(),
+        key=lambda item: abs(float(item[1])),
+        reverse=True,
+    )[:8]
+    for key, value in ordered:
+        print(f"    {key}={float(value):.8f}")
+
+    print("  winner_regime_counts=" + json.dumps(winners.get("regime_counts", {}), ensure_ascii=False, sort_keys=True))
+    print("  loser_regime_counts=" + json.dumps(losers.get("regime_counts", {}), ensure_ascii=False, sort_keys=True))
+
+
 def _summarize_reject_reasons(results: list[dict[str, object]]) -> dict[str, int]:
     """
     功能：統計未通過 gate 的 reject_reason 數量。
@@ -363,6 +395,7 @@ def main() -> None:
             print(f"mutation_tag={params.get('mutation_tag')}")
             print(f"family_tag={_extract_family_tag(params)}")
             _print_weight_summary(params)
+            _print_feature_diagnostics(metrics)
             print("params=" + json.dumps(params, ensure_ascii=False, sort_keys=True))
             print("")
 
