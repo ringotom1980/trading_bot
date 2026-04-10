@@ -5,6 +5,13 @@ Path: scripts/seed_strategy.py
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from config.logging import get_logger, setup_logging
 from config.settings import load_settings
 from storage.db import connection_scope, test_connection
@@ -126,7 +133,7 @@ def seed_initial_strategy() -> None:
                 interval=settings.primary_interval,
                 feature_set=build_initial_feature_set(),
                 params=build_initial_params(),
-                note="第一版初始 ACTIVE 策略",
+                note="第二版初始 ACTIVE 策略",
             )
             logger.info("已建立初始策略：version_code=%s, strategy_version_id=%s", version_code, strategy_version_id)
         else:
