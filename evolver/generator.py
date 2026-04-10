@@ -14,18 +14,18 @@ from strategy.signals import DEFAULT_WEIGHTS
 
 
 THRESHOLD_FIELD_SPECS: dict[str, tuple[list[float], int]] = {
-    "entry_threshold": ([-0.12, -0.08, -0.05, 0.03, 0.05], 4),
-    "exit_threshold": ([-0.08, -0.05, 0.05, 0.08], 4),
-    "reverse_threshold": ([-0.08, -0.05, 0.05, 0.08], 4),
-    "reverse_gap": ([-0.04, -0.02, 0.02, 0.04], 4),
-    "hard_stop_loss_pct": ([-0.008, -0.005, 0.005, 0.008], 4),
-    "take_profit_pct": ([-0.015, -0.01, 0.01, 0.015], 4),
+    "entry_threshold": ([-0.18, -0.12, -0.08, -0.05, 0.03, 0.05, 0.08, 0.12], 4),
+    "exit_threshold": ([-0.12, -0.08, -0.05, 0.05, 0.08, 0.12], 4),
+    "reverse_threshold": ([-0.12, -0.08, -0.05, 0.05, 0.08, 0.12], 4),
+    "reverse_gap": ([-0.05, -0.03, -0.02, 0.02, 0.03, 0.05], 4),
+    "hard_stop_loss_pct": ([-0.010, -0.008, -0.005, 0.005, 0.008, 0.012], 4),
+    "take_profit_pct": ([-0.020, -0.015, -0.010, 0.010, 0.015, 0.020], 4),
 }
 
 INT_FIELD_SPECS: dict[str, list[int]] = {
-    "cooldown_bars": [-2, -1, 1, 2],
-    "min_hold_bars": [-2, -1, 1, 2, 4],
-    "max_bars_hold": [-18, -12, 12, 18, 24],
+    "cooldown_bars": [-2, -1, 1, 2, 4],
+    "min_hold_bars": [-2, -1, 1, 2, 4, 6],
+    "max_bars_hold": [-24, -18, -12, 12, 18, 24, 36],
 }
 
 WEIGHT_MUTATION_TEMPLATES: list[dict[str, Any]] = [
@@ -285,6 +285,35 @@ PROFILE_TEMPLATES: list[dict[str, Any]] = [
             "reverse_gap": 0.09,
         },
     },
+        {
+        "name": "entry_strict",
+        "overrides": {
+            "entry_threshold": 0.68,
+            "reverse_threshold": 0.76,
+            "reverse_gap": 0.14,
+        },
+    },
+    {
+        "name": "fast_exit",
+        "overrides": {
+            "exit_threshold": 0.48,
+            "max_bars_hold": 12,
+        },
+    },
+    {
+        "name": "slow_exit",
+        "overrides": {
+            "exit_threshold": 0.36,
+            "max_bars_hold": 30,
+        },
+    },
+    {
+        "name": "risk_minimal_tp_off",
+        "overrides": {
+            "hard_stop_loss_pct": 0.012,
+            "take_profit_pct": 0.0,
+        },
+    },
 ]
 
 
@@ -322,8 +351,8 @@ def _apply_safe_defaults(params: dict[str, Any]) -> dict[str, Any]:
     if float(normalized.get("hard_stop_loss_pct", 0.0)) <= 0:
         normalized["hard_stop_loss_pct"] = 0.015
 
-    if float(normalized.get("take_profit_pct", 0.0)) <= 0:
-        normalized["take_profit_pct"] = 0.03
+    if "take_profit_pct" not in normalized:
+        normalized["take_profit_pct"] = 0.0
 
     if int(normalized.get("min_hold_bars", 0)) <= 0:
         normalized["min_hold_bars"] = 1
@@ -464,7 +493,7 @@ def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any
             elif field == "hard_stop_loss_pct":
                 new_value = _clamp_float(new_value, 0.008, 0.04)
             elif field == "take_profit_pct":
-                new_value = _clamp_float(new_value, 0.015, 0.08)
+                new_value = _clamp_float(new_value, 0.0, 0.10)
 
             if _round_float(new_value, 6) == _round_float(base_value, 6):
                 continue
@@ -540,7 +569,10 @@ def _is_valid_candidate(params: dict[str, Any]) -> bool:
     if hard_stop_loss_pct <= 0:
         return False
 
-    if take_profit_pct <= hard_stop_loss_pct:
+    if take_profit_pct < 0:
+        return False
+
+    if take_profit_pct > 0 and take_profit_pct <= hard_stop_loss_pct:
         return False
 
     weights = params.get("weights")
@@ -614,7 +646,7 @@ def generate_param_candidates(
             params["weights"] = deepcopy(normalized_base["weights"])
         candidates.append(params)
 
-    selected_threshold_variants = threshold_variants[:16]
+    selected_threshold_variants = threshold_variants[:28]
     selected_weight_variants = [
         p for p in weight_variants[1:]
         if str(p.get("mutation_tag")) in {
@@ -626,7 +658,7 @@ def generate_param_candidates(
             "long_momentum_short_trend",
         }
     ]
-    selected_profile_variants = profile_variants[:6]
+    selected_profile_variants = profile_variants[:10]
 
     # threshold + weight
     for threshold_params in selected_threshold_variants:

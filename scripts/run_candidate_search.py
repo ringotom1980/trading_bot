@@ -21,7 +21,7 @@ from backtest.metrics import calculate_backtest_metrics
 from backtest.replay_engine import run_backtest_replay
 from config.settings import load_settings
 from evolver.generator import generate_param_candidates
-from evolver.scorer import calculate_candidate_score
+from evolver.scorer import calculate_candidate_score, evaluate_candidate_gate
 from storage.db import connection_scope
 from storage.repositories.historical_klines_repo import get_historical_klines_by_range
 from storage.repositories.strategy_versions_repo import (
@@ -264,6 +264,7 @@ def main() -> None:
             trades=replay_result["trades"],
             equity_curve=replay_result["equity_curve"],
         )
+        is_qualified, reject_reason = evaluate_candidate_gate(metrics)
 
         score = calculate_candidate_score(metrics)
 
@@ -272,6 +273,8 @@ def main() -> None:
             "candidate_no": idx,
             "params": candidate_params,
             "metrics": metrics,
+            "is_qualified": is_qualified,
+            "reject_reason": reject_reason,
         }
         raw_results.append(row)
 
@@ -284,7 +287,8 @@ def main() -> None:
                 f"latest_net_pnl={float(metrics['net_pnl']):.8f}"
             )
 
-    deduped_results = _dedupe_results_by_behavior(raw_results)
+    qualified_results = [row for row in raw_results if bool(row["is_qualified"])]
+    deduped_results = _dedupe_results_by_behavior(qualified_results)
     deduped_results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
     diversified_results = _apply_family_diversity_cap(
         deduped_results,
@@ -300,11 +304,16 @@ def main() -> None:
     print(f"range_end={end_time.isoformat()}")
     print(f"kline_count={len(klines)}")
     print(f"raw_candidate_count={len(raw_results)}")
+    print(f"qualified_candidate_count={len(qualified_results)}")
     print(f"deduped_candidate_count={len(deduped_results)}")
     print(f"diversified_candidate_count={len(diversified_results)}")
     print(f"per_family_limit={args.per_family_limit}")
     print(f"elapsed={_format_elapsed(time.time() - started_at)}")
     print("")
+
+    if not diversified_results:
+        print("無合格 candidate（全部未通過 gate）")
+        return
 
     top_n = min(args.top, len(diversified_results))
     for i in range(top_n):
