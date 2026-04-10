@@ -111,7 +111,7 @@ def seed_initial_strategy() -> None:
     logger = get_logger("scripts.seed_strategy")
     settings = load_settings()
 
-    version_code = "btc15m_v001"
+    version_code = "btc15m_v002"
 
     with connection_scope() as conn:
         existing_strategy = get_strategy_version_by_code(conn, version_code)
