@@ -84,6 +84,61 @@ def _apply_exit_slippage(*, side: str, price: float, slippage_rate: float) -> fl
     raise ValueError(f"不支援的 side：{side}")
 
 
+def _resolve_risk_exit_price(
+    *,
+    side: str,
+    entry_price: float,
+    high_price: float,
+    low_price: float,
+    hard_stop_loss_pct: float,
+    take_profit_pct: float,
+) -> tuple[str | None, float | None]:
+    """
+    功能：依 bar 的 high / low 判斷風控出場是否觸發，並回傳：
+        (reason_code, raw_exit_price)
+
+    規則：
+        - 若同一根同時碰到停損與停利，採保守口徑，優先視為停損
+        - LONG:
+            stop = entry * (1 - stop_loss_pct)
+            take = entry * (1 + take_profit_pct)
+        - SHORT:
+            stop = entry * (1 + stop_loss_pct)
+            take = entry * (1 - take_profit_pct)
+    """
+    stop_loss_hit = False
+    take_profit_hit = False
+    stop_loss_price: float | None = None
+    take_profit_price: float | None = None
+
+    if side == "LONG":
+        if hard_stop_loss_pct > 0:
+            stop_loss_price = entry_price * (1 - hard_stop_loss_pct)
+            stop_loss_hit = low_price <= stop_loss_price
+        if take_profit_pct > 0:
+            take_profit_price = entry_price * (1 + take_profit_pct)
+            take_profit_hit = high_price >= take_profit_price
+
+    elif side == "SHORT":
+        if hard_stop_loss_pct > 0:
+            stop_loss_price = entry_price * (1 + hard_stop_loss_pct)
+            stop_loss_hit = high_price >= stop_loss_price
+        if take_profit_pct > 0:
+            take_profit_price = entry_price * (1 - take_profit_pct)
+            take_profit_hit = low_price <= take_profit_price
+
+    else:
+        raise ValueError(f"不支援的 side：{side}")
+
+    if stop_loss_hit:
+        return "HARD_STOP_LOSS", stop_loss_price
+
+    if take_profit_hit:
+        return "TAKE_PROFIT", take_profit_price
+
+    return None, None
+
+
 def run_backtest_replay(
     *,
     klines: list[dict[str, Any]],
@@ -150,6 +205,7 @@ def run_backtest_replay(
 
         effective_decision = decision_result["decision"]
         effective_reason = decision_result["reason_code"]
+        risk_exit_price: float | None = None
 
         if current_position is None:
             if effective_decision in {"ENTER_LONG", "ENTER_SHORT"} and last_exit_bar_index is not None:
@@ -163,32 +219,18 @@ def run_backtest_replay(
             position_side = str(current_position["side"])
             entry_price = float(current_position["entry_price"])
 
-            stop_loss_hit = False
-            take_profit_hit = False
+            risk_exit_reason, risk_exit_price = _resolve_risk_exit_price(
+                side=position_side,
+                entry_price=entry_price,
+                high_price=high_price,
+                low_price=low_price,
+                hard_stop_loss_pct=hard_stop_loss_pct,
+                take_profit_pct=take_profit_pct,
+            )
 
-            if position_side == "LONG":
-                if hard_stop_loss_pct > 0:
-                    stop_loss_price = entry_price * (1 - hard_stop_loss_pct)
-                    stop_loss_hit = low_price <= stop_loss_price
-                if take_profit_pct > 0:
-                    take_profit_price = entry_price * (1 + take_profit_pct)
-                    take_profit_hit = high_price >= take_profit_price
-
-            elif position_side == "SHORT":
-                if hard_stop_loss_pct > 0:
-                    stop_loss_price = entry_price * (1 + hard_stop_loss_pct)
-                    stop_loss_hit = high_price >= stop_loss_price
-                if take_profit_pct > 0:
-                    take_profit_price = entry_price * (1 - take_profit_pct)
-                    take_profit_hit = low_price <= take_profit_price
-
-            if stop_loss_hit:
+            if risk_exit_reason is not None:
                 effective_decision = "EXIT"
-                effective_reason = "HARD_STOP_LOSS"
-
-            elif take_profit_hit:
-                effective_decision = "EXIT"
-                effective_reason = "TAKE_PROFIT"
+                effective_reason = risk_exit_reason
 
             elif max_bars_hold > 0 and bars_held >= max_bars_hold:
                 effective_decision = "EXIT"
@@ -251,9 +293,10 @@ def run_backtest_replay(
 
         else:
             if effective_decision == "EXIT":
+                raw_exit_price = risk_exit_price if risk_exit_price is not None else close_price
                 exit_price = _apply_exit_slippage(
                     side=str(current_position["side"]),
-                    price=close_price,
+                    price=raw_exit_price,
                     slippage_rate=slippage_rate,
                 )
                 gross_pnl = _calc_pnl(
@@ -276,6 +319,8 @@ def run_backtest_replay(
                     "exit_time": close_time,
                     "entry_price": float(current_position["entry_price"]),
                     "exit_price": exit_price,
+                    "exit_trigger_price": raw_exit_price,
+                    "exit_bar_close_price": close_price,
                     "qty": qty,
                     "gross_pnl": gross_pnl,
                     "fees": fees,
@@ -320,6 +365,8 @@ def run_backtest_replay(
             "exit_time": final_close_time,
             "entry_price": float(current_position["entry_price"]),
             "exit_price": final_exit_price,
+            "exit_trigger_price": final_close_price,
+            "exit_bar_close_price": final_close_price,
             "qty": qty,
             "gross_pnl": gross_pnl,
             "fees": fees,

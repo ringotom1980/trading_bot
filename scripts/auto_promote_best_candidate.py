@@ -117,6 +117,24 @@ def _candidate_already_promoted(candidate: dict[str, Any]) -> bool:
     return False
 
 
+def _extract_candidate_backtest_summary(candidate: dict[str, Any]) -> dict[str, Any]:
+    """
+    功能：從 candidate 中提取乾淨的 backtest summary。
+    原則：
+        - 只放 candidate 自己的回測結果
+        - 不混入 validation / walk-forward 摘要
+    """
+    summary = candidate.get("backtest_summary_json")
+    if isinstance(summary, dict):
+        return dict(summary)
+
+    metrics_json = candidate.get("metrics_json")
+    if isinstance(metrics_json, dict):
+        return dict(metrics_json)
+
+    return {}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Auto promote best validated candidate")
     parser.add_argument("--start-date", type=str, required=True, help="validation start YYYY-MM-DD")
@@ -234,6 +252,7 @@ def main() -> None:
         selected_params: dict[str, Any] = {}
         selected_source_mode: str | None = None
         selected_walk_forward_score: float | None = None
+        selected_backtest_summary: dict[str, Any] = {}
 
         passed_walk_forward_candidates: list[dict[str, Any]] = []
         fallback_single_range_candidates: list[dict[str, Any]] = []
@@ -322,6 +341,7 @@ def main() -> None:
             selected_params = dict(chosen["candidate_params"])
             selected_source_mode = "walk_forward"
             selected_walk_forward_score = float(chosen["wf_score"])
+            selected_backtest_summary = _extract_candidate_backtest_summary(best_candidate)
 
         elif fallback_single_range_candidates:
             fallback_single_range_candidates.sort(
@@ -338,6 +358,7 @@ def main() -> None:
             selected_params = dict(chosen["candidate_params"])
             selected_source_mode = "single_range"
             selected_walk_forward_score = None
+            selected_backtest_summary = _extract_candidate_backtest_summary(best_candidate)
             
         current_active_params = dict(current_active_strategy["params_json"] or {})
 
@@ -418,7 +439,7 @@ def main() -> None:
             interval=str(active_strategy["interval"]),
             feature_set=dict(active_strategy["feature_set_json"] or {}),
             params=selected_params,
-            backtest_summary=None,
+            backtest_summary=selected_backtest_summary or None,
             validation_summary=selected_validation_payload,
             promotion_score=float(selected_rank_score),
             note=f"auto promoted from candidate_id={best_candidate_id}",
@@ -449,6 +470,7 @@ def main() -> None:
                 "old_strategy_version_id": current_active_strategy_version_id,
                 "new_strategy_version_id": new_strategy_version_id,
                 "new_version_code": new_version_code,
+                "backtest_summary": selected_backtest_summary,
                 "validation_summary": selected_validation_payload,
                 "promotion_score": float(selected_rank_score),
                 "validation_source_mode": selected_source_mode,
