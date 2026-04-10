@@ -13,6 +13,9 @@ DEFAULT_EXIT_THRESHOLD = 0.45
 DEFAULT_REVERSE_THRESHOLD = 0.68
 DEFAULT_REVERSE_GAP = 0.08
 DEFAULT_EXIT_GAP = 0.03
+DEFAULT_ENTRY_MIN_GAP = 0.12
+DEFAULT_ENTRY_CONFIRM_SCORE = 0.64
+DEFAULT_HOLD_MIN_SCORE = 0.52
 
 
 def _resolve_thresholds(params: dict[str, Any] | None) -> dict[str, float]:
@@ -23,6 +26,9 @@ def _resolve_thresholds(params: dict[str, Any] | None) -> dict[str, float]:
             "reverse_threshold": DEFAULT_REVERSE_THRESHOLD,
             "reverse_gap": DEFAULT_REVERSE_GAP,
             "exit_gap": DEFAULT_EXIT_GAP,
+            "entry_min_gap": DEFAULT_ENTRY_MIN_GAP,
+            "entry_confirm_score": DEFAULT_ENTRY_CONFIRM_SCORE,
+            "hold_min_score": DEFAULT_HOLD_MIN_SCORE,
         }
 
     return {
@@ -31,6 +37,9 @@ def _resolve_thresholds(params: dict[str, Any] | None) -> dict[str, float]:
         "reverse_threshold": float(params.get("reverse_threshold", DEFAULT_REVERSE_THRESHOLD)),
         "reverse_gap": float(params.get("reverse_gap", DEFAULT_REVERSE_GAP)),
         "exit_gap": float(params.get("exit_gap", DEFAULT_EXIT_GAP)),
+        "entry_min_gap": float(params.get("entry_min_gap", DEFAULT_ENTRY_MIN_GAP)),
+        "entry_confirm_score": float(params.get("entry_confirm_score", DEFAULT_ENTRY_CONFIRM_SCORE)),
+        "hold_min_score": float(params.get("hold_min_score", DEFAULT_HOLD_MIN_SCORE)),
     }
 
 
@@ -58,24 +67,33 @@ def decide_without_position(
     thresholds: dict[str, float],
 ) -> dict[str, Any]:
     entry_threshold = thresholds["entry_threshold"]
-    reverse_gap = thresholds["reverse_gap"]
+    entry_min_gap = thresholds["entry_min_gap"]
+    entry_confirm_score = thresholds["entry_confirm_score"]
 
-    if long_score >= entry_threshold and long_score > short_score + reverse_gap:
+    if (
+        long_score >= entry_threshold
+        and long_score >= entry_confirm_score
+        and (long_score - short_score) >= entry_min_gap
+    ):
         return build_decision_result(
             decision="ENTER_LONG",
             decision_score=long_score,
             reason_code="ENTRY_SIGNAL",
-            reason_summary="無持倉，long_score 達進場門檻且明顯強於 short_score",
+            reason_summary="無持倉，long_score 達進場門檻且雙邊分數差達確認條件",
             long_score=long_score,
             short_score=short_score,
         )
 
-    if short_score >= entry_threshold and short_score > long_score + reverse_gap:
+    if (
+        short_score >= entry_threshold
+        and short_score >= entry_confirm_score
+        and (short_score - long_score) >= entry_min_gap
+    ):
         return build_decision_result(
             decision="ENTER_SHORT",
             decision_score=short_score,
             reason_code="ENTRY_SIGNAL",
-            reason_summary="無持倉，short_score 達進場門檻且明顯強於 long_score",
+            reason_summary="無持倉，short_score 達進場門檻且雙邊分數差達確認條件",
             long_score=long_score,
             short_score=short_score,
         )
@@ -99,23 +117,14 @@ def decide_with_long_position(
     reverse_gap = thresholds["reverse_gap"]
     exit_threshold = thresholds["exit_threshold"]
     exit_gap = thresholds["exit_gap"]
+    hold_min_score = thresholds["hold_min_score"]
 
-    if short_score >= reverse_threshold and short_score > long_score + reverse_gap:
+    if short_score >= reverse_threshold and (short_score - long_score) >= reverse_gap:
         return build_decision_result(
             decision="EXIT",
             decision_score=short_score,
             reason_code="REVERSE_SIGNAL",
-            reason_summary="目前持有 LONG，但 short_score 達反向門檻，先退出等待下一輪反向",
-            long_score=long_score,
-            short_score=short_score,
-        )
-
-    if long_score <= short_score + exit_gap:
-        return build_decision_result(
-            decision="EXIT",
-            decision_score=long_score,
-            reason_code="EDGE_LOST",
-            reason_summary="目前持有 LONG，但 long 優勢已明顯收斂，先退出",
+            reason_summary="目前持有 LONG，但 short_score 達反向門檻且明顯強於 long_score，先退出",
             long_score=long_score,
             short_score=short_score,
         )
@@ -126,6 +135,16 @@ def decide_with_long_position(
             decision_score=long_score,
             reason_code="EXIT_SIGNAL",
             reason_summary="目前持有 LONG，但 long_score 已跌破出場門檻",
+            long_score=long_score,
+            short_score=short_score,
+        )
+
+    if long_score < hold_min_score and (long_score - short_score) <= exit_gap:
+        return build_decision_result(
+            decision="EXIT",
+            decision_score=long_score,
+            reason_code="EDGE_LOST",
+            reason_summary="目前持有 LONG，long_score 偏弱且優勢差不足，先退出",
             long_score=long_score,
             short_score=short_score,
         )
@@ -149,23 +168,14 @@ def decide_with_short_position(
     reverse_gap = thresholds["reverse_gap"]
     exit_threshold = thresholds["exit_threshold"]
     exit_gap = thresholds["exit_gap"]
+    hold_min_score = thresholds["hold_min_score"]
 
-    if long_score >= reverse_threshold and long_score > short_score + reverse_gap:
+    if long_score >= reverse_threshold and (long_score - short_score) >= reverse_gap:
         return build_decision_result(
             decision="EXIT",
             decision_score=long_score,
             reason_code="REVERSE_SIGNAL",
-            reason_summary="目前持有 SHORT，但 long_score 達反向門檻，先退出等待下一輪反向",
-            long_score=long_score,
-            short_score=short_score,
-        )
-
-    if short_score <= long_score + exit_gap:
-        return build_decision_result(
-            decision="EXIT",
-            decision_score=short_score,
-            reason_code="EDGE_LOST",
-            reason_summary="目前持有 SHORT，但 short 優勢已明顯收斂，先退出",
+            reason_summary="目前持有 SHORT，但 long_score 達反向門檻且明顯強於 short_score，先退出",
             long_score=long_score,
             short_score=short_score,
         )
@@ -176,6 +186,16 @@ def decide_with_short_position(
             decision_score=short_score,
             reason_code="EXIT_SIGNAL",
             reason_summary="目前持有 SHORT，但 short_score 已跌破出場門檻",
+            long_score=long_score,
+            short_score=short_score,
+        )
+
+    if short_score < hold_min_score and (short_score - long_score) <= exit_gap:
+        return build_decision_result(
+            decision="EXIT",
+            decision_score=short_score,
+            reason_code="EDGE_LOST",
+            reason_summary="目前持有 SHORT，short_score 偏弱且優勢差不足，先退出",
             long_score=long_score,
             short_score=short_score,
         )
