@@ -5,6 +5,13 @@ Path: scripts/check_signals.py
 
 from __future__ import annotations
 
+from pathlib import Path
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
 from config.logging import get_logger, setup_logging
 from config.settings import load_settings
 from exchange.binance_client import BinanceClient
@@ -46,11 +53,19 @@ def main() -> None:
 
     logger.info("feature 計算完成")
     logger.info("bar_close_time=%s", feature_pack["bar_close_time"])
+    logger.info("rsi_14=%s", feature_pack["rsi_14"])
+    logger.info("macd_hist=%s", feature_pack["macd_hist"])
+    logger.info("kd_diff=%s", feature_pack["kd_diff"])
     logger.info("close_vs_sma20_pct=%s", feature_pack["close_vs_sma20_pct"])
     logger.info("close_vs_sma60_pct=%s", feature_pack["close_vs_sma60_pct"])
     logger.info("slope_5=%s", feature_pack["slope_5"])
     logger.info("slope_10=%s", feature_pack["slope_10"])
+    logger.info("atr_14_pct=%s", feature_pack["atr_14_pct"])
+    logger.info("volatility_10=%s", feature_pack["volatility_10"])
     logger.info("volume_ratio_20=%s", feature_pack["volume_ratio_20"])
+    logger.info("volume_slope_5=%s", feature_pack["volume_slope_5"])
+    logger.info("regime=%s", feature_pack["regime"])
+    logger.info("regime_score=%s", feature_pack["regime_score"])
 
     logger.info("signal 計算完成")
     logger.info("long_score=%s", signal_scores["long_score"])
