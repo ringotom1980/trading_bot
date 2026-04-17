@@ -1,6 +1,7 @@
 """
 Path: scripts/run_weekly_cycle.py
-說明：週期流程 v3，依序執行 historical sync、train candidate search/save、walk-forward validation、auto promote。
+說明：週期流程 v4，依序執行 historical sync、train candidate search/save、
+walk-forward validation、rebuild summaries、governor、auto promote。
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ def _resolve_date_ranges(
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Run weekly cycle v3")
+    parser = argparse.ArgumentParser(description="Run weekly cycle v4")
     parser.add_argument("--train-days", type=int, default=30, help="train 區間天數，預設 30")
     parser.add_argument("--validation-days", type=int, default=7, help="validation 區間天數，預設 7")
     parser.add_argument("--search-top", type=int, default=10, help="candidate search 顯示前幾名，預設 10")
@@ -66,23 +67,20 @@ def main() -> None:
     parser.add_argument("--validation-top-limit", type=int, default=5, help="validation 驗 top 幾名，預設 5")
     parser.add_argument("--walk-forward-window-days", type=int, default=5, help="walk-forward window 天數，預設 5")
     parser.add_argument("--walk-forward-step-days", type=int, default=3, help="walk-forward step 天數，預設 3")
+    parser.add_argument("--symbol", default="BTCUSDT", help="交易標的，預設 BTCUSDT")
+    parser.add_argument("--interval", default="15m", help="週期，預設 15m")
     args = parser.parse_args()
 
     if args.train_days <= 0:
         raise ValueError("--train-days 必須大於 0")
-
     if args.validation_days <= 0:
         raise ValueError("--validation-days 必須大於 0")
-
     if args.search_max_candidates <= 0:
         raise ValueError("--search-max-candidates 必須大於 0")
-
     if args.validation_top_limit <= 0:
         raise ValueError("--validation-top-limit 必須大於 0")
-    
     if args.walk_forward_window_days <= 0:
         raise ValueError("--walk-forward-window-days 必須大於 0")
-
     if args.walk_forward_step_days <= 0:
         raise ValueError("--walk-forward-step-days 必須大於 0")
 
@@ -93,7 +91,9 @@ def main() -> None:
         validation_days=args.validation_days,
     )
 
-    print("weekly cycle v3 開始", flush=True)
+    print("weekly cycle v4 開始", flush=True)
+    print(f"symbol={args.symbol}", flush=True)
+    print(f"interval={args.interval}", flush=True)
     print(f"train_start={ranges['train_start']}", flush=True)
     print(f"train_end={ranges['train_end']}", flush=True)
     print(f"validation_start={ranges['validation_start']}", flush=True)
@@ -131,19 +131,50 @@ def main() -> None:
         "--step-days", str(args.walk_forward_step_days),
         "--persist",
     ])
-    
-    # Step 4: governor analyze + keep/adjust search space
-    governor_run_key = (
-        f"weekly_governor_{today_utc.strftime('%Y%m%d%H%M%S')}"
-    )
+
+    # Step 4: rebuild family performance summary from real candidate + walk-forward data
+    family_summary_output = _run_and_capture([
+        PYTHON_BIN,
+        str(ROOT_DIR / "scripts" / "rebuild_family_performance_summary.py"),
+        "--symbol", args.symbol,
+        "--interval", args.interval,
+    ])
+    try:
+        family_summary_result = json.loads(family_summary_output)
+        print(
+            f"family_summary_family_count={family_summary_result.get('family_count')}, "
+            f"family_summary_used_candidate_count={family_summary_result.get('used_candidate_count')}",
+            flush=True,
+        )
+    except json.JSONDecodeError:
+        print("family summary output is not valid json", flush=True)
+
+    # Step 5: rebuild feature diagnostics summary from real candidate + walk-forward data
+    feature_summary_output = _run_and_capture([
+        PYTHON_BIN,
+        str(ROOT_DIR / "scripts" / "rebuild_feature_diagnostics_summary.py"),
+        "--symbol", args.symbol,
+        "--interval", args.interval,
+    ])
+    try:
+        feature_summary_result = json.loads(feature_summary_output)
+        print(
+            f"feature_summary_feature_count={feature_summary_result.get('feature_count')}, "
+            f"feature_summary_used_candidate_count={feature_summary_result.get('used_candidate_count')}",
+            flush=True,
+        )
+    except json.JSONDecodeError:
+        print("feature summary output is not valid json", flush=True)
+
+    # Step 6: governor analyze + keep/adjust search space
+    governor_run_key = f"weekly_governor_{today_utc.strftime('%Y%m%d%H%M%S')}"
     governor_output = _run_and_capture([
         PYTHON_BIN,
         str(ROOT_DIR / "scripts" / "run_governor_cycle.py"),
-        "--symbol", "BTCUSDT",
-        "--interval", "15m",
+        "--symbol", args.symbol,
+        "--interval", args.interval,
         "--run-key", governor_run_key,
     ])
-
     try:
         governor_result = json.loads(governor_output)
         print(
@@ -155,7 +186,7 @@ def main() -> None:
     except json.JSONDecodeError:
         print("governor output is not valid json", flush=True)
 
-    # Step 5: auto promote only walk-forward passed candidate
+    # Step 7: auto promote only walk-forward passed candidate
     _run([
         PYTHON_BIN,
         str(ROOT_DIR / "scripts" / "auto_promote_best_candidate.py"),
@@ -167,7 +198,9 @@ def main() -> None:
     ])
 
     print("")
-    print("weekly cycle v3 完成", flush=True)
+    print("weekly cycle v4 完成", flush=True)
+    print(f"symbol={args.symbol}", flush=True)
+    print(f"interval={args.interval}", flush=True)
     print(f"train_start={ranges['train_start']}", flush=True)
     print(f"train_end={ranges['train_end']}", flush=True)
     print(f"validation_start={ranges['validation_start']}", flush=True)
