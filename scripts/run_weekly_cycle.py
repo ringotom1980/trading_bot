@@ -10,6 +10,7 @@ from datetime import datetime, timedelta, timezone
 import argparse
 import subprocess
 import sys
+import json
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 PYTHON_BIN = sys.executable
@@ -18,6 +19,16 @@ PYTHON_BIN = sys.executable
 def _run(cmd: list[str]) -> None:
     print(">>>", " ".join(cmd), flush=True)
     subprocess.run(cmd, check=True)
+
+
+def _run_and_capture(cmd: list[str]) -> str:
+    print(">>>", " ".join(cmd), flush=True)
+    completed = subprocess.run(cmd, check=True, capture_output=True, text=True)
+    if completed.stdout:
+        print(completed.stdout, flush=True)
+    if completed.stderr:
+        print(completed.stderr, flush=True)
+    return completed.stdout
 
 
 def _resolve_date_ranges(
@@ -120,8 +131,31 @@ def main() -> None:
         "--step-days", str(args.walk_forward_step_days),
         "--persist",
     ])
+    
+    # Step 4: governor analyze + keep/adjust search space
+    governor_run_key = (
+        f"weekly_governor_{today_utc.strftime('%Y%m%d%H%M%S')}"
+    )
+    governor_output = _run_and_capture([
+        PYTHON_BIN,
+        str(ROOT_DIR / "scripts" / "run_governor_cycle.py"),
+        "--symbol", "BTCUSDT",
+        "--interval", "15m",
+        "--run-key", governor_run_key,
+    ])
 
-    # Step 4: auto promote only walk-forward passed candidate
+    try:
+        governor_result = json.loads(governor_output)
+        print(
+            f"governor_status={governor_result.get('status')}, "
+            f"governor_run_key={governor_result.get('run_key')}, "
+            f"decision_count={len(governor_result.get('decisions', []))}",
+            flush=True,
+        )
+    except json.JSONDecodeError:
+        print("governor output is not valid json", flush=True)
+
+    # Step 5: auto promote only walk-forward passed candidate
     _run([
         PYTHON_BIN,
         str(ROOT_DIR / "scripts" / "auto_promote_best_candidate.py"),
