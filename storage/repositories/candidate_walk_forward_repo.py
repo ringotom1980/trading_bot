@@ -326,3 +326,83 @@ def get_latest_passed_candidate_walk_forward_run(
         return None
 
     return _row_to_walk_forward_run(row)
+
+
+def get_recent_candidate_walk_forward_runs(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """
+    功能：查詢指定 symbol / interval 最近 walk-forward runs，供 governor summary 重建使用。
+    """
+    sql = """
+    SELECT
+        run_id,
+        candidate_id,
+        source_strategy_version_id,
+        symbol,
+        interval,
+        train_range_start,
+        train_range_end,
+        validation_range_start,
+        validation_range_end,
+        window_days,
+        step_days,
+        total_windows,
+        pass_windows,
+        beat_active_windows,
+        pass_ratio,
+        avg_net_pnl,
+        avg_profit_factor,
+        avg_max_drawdown,
+        worst_window_net_pnl,
+        worst_window_drawdown,
+        active_avg_net_pnl,
+        active_avg_profit_factor,
+        active_avg_max_drawdown,
+        final_status,
+        summary_json,
+        created_at
+    FROM candidate_walk_forward_runs
+    WHERE symbol = %s
+      AND interval = %s
+    ORDER BY created_at DESC, run_id DESC
+    LIMIT %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (symbol, interval, limit))
+        rows = cursor.fetchall()
+
+    return [_row_to_walk_forward_run(row) for row in rows]
+
+
+def get_latest_candidate_walk_forward_runs_map(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+    limit: int = 1000,
+) -> dict[int, dict[str, Any]]:
+    """
+    功能：取每個 candidate_id 最新一筆 walk-forward run。
+    回傳：
+        {candidate_id: run_dict}
+    """
+    rows = get_recent_candidate_walk_forward_runs(
+        conn,
+        symbol=symbol,
+        interval=interval,
+        limit=limit,
+    )
+
+    result: dict[int, dict[str, Any]] = {}
+    for row in rows:
+        candidate_id = int(row["candidate_id"])
+        if candidate_id not in result:
+            result[candidate_id] = row
+
+    return result

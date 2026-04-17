@@ -327,3 +327,80 @@ def get_strategy_candidate_by_id(
         return None
 
     return _row_to_strategy_candidate(row)
+
+
+def get_recent_strategy_candidates(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    """
+    功能：查詢指定 symbol / interval 最近 candidate，供 governor summary 重建使用。
+    """
+    sql = """
+    SELECT
+        candidate_id,
+        source_strategy_version_id,
+        symbol,
+        interval,
+        tested_range_start,
+        tested_range_end,
+        candidate_no,
+        params_json,
+        metrics_json,
+        rank_score,
+        candidate_status,
+        note,
+        created_at
+    FROM strategy_candidates
+    WHERE symbol = %s
+      AND interval = %s
+    ORDER BY created_at DESC, candidate_id DESC
+    LIMIT %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (symbol, interval, limit))
+        rows = cursor.fetchall()
+
+    return [_row_to_strategy_candidate(row) for row in rows]
+
+
+def get_strategy_candidates_by_ids(
+    conn: PgConnection,
+    *,
+    candidate_ids: list[int],
+) -> list[dict[str, Any]]:
+    """
+    功能：依 candidate_id 清單查詢多筆 candidate。
+    """
+    if not candidate_ids:
+        return []
+
+    sql = """
+    SELECT
+        candidate_id,
+        source_strategy_version_id,
+        symbol,
+        interval,
+        tested_range_start,
+        tested_range_end,
+        candidate_no,
+        params_json,
+        metrics_json,
+        rank_score,
+        candidate_status,
+        note,
+        created_at
+    FROM strategy_candidates
+    WHERE candidate_id = ANY(%s)
+    ORDER BY candidate_id ASC
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (candidate_ids,))
+        rows = cursor.fetchall()
+
+    return [_row_to_strategy_candidate(row) for row in rows]
