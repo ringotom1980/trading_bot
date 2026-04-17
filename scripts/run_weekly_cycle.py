@@ -17,9 +17,17 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 PYTHON_BIN = sys.executable
 
 
-def _run(cmd: list[str]) -> None:
+def _run(cmd: list[str], *, allow_failure: bool = False) -> subprocess.CompletedProcess[str]:
     print(">>>", " ".join(cmd), flush=True)
-    subprocess.run(cmd, check=True)
+    completed = subprocess.run(cmd, check=not allow_failure, text=True, capture_output=allow_failure)
+
+    if allow_failure:
+        if completed.stdout:
+            print(completed.stdout, flush=True)
+        if completed.stderr:
+            print(completed.stderr, flush=True)
+
+    return completed
 
 
 def _run_and_capture(cmd: list[str]) -> str:
@@ -30,6 +38,11 @@ def _run_and_capture(cmd: list[str]) -> str:
     if completed.stderr:
         print(completed.stderr, flush=True)
     return completed.stdout
+
+
+def _looks_like_no_candidates_error(completed: subprocess.CompletedProcess[str]) -> bool:
+    output = f"{completed.stdout}\n{completed.stderr}".strip()
+    return "找不到可驗證的 top candidates" in output
 
 
 def _resolve_date_ranges(
@@ -121,16 +134,38 @@ def main() -> None:
     ])
 
     # Step 3: walk-forward validation on same active source strategy top candidates
-    _run([
-        PYTHON_BIN,
-        str(ROOT_DIR / "scripts" / "run_walk_forward_validation.py"),
-        "--top-limit", str(args.validation_top_limit),
-        "--start-date", ranges["validation_start"],
-        "--end-date", ranges["validation_end"],
-        "--window-days", str(args.walk_forward_window_days),
-        "--step-days", str(args.walk_forward_step_days),
-        "--persist",
-    ])
+    validation_completed = _run(
+        [
+            PYTHON_BIN,
+            str(ROOT_DIR / "scripts" / "run_walk_forward_validation.py"),
+            "--top-limit", str(args.validation_top_limit),
+            "--start-date", ranges["validation_start"],
+            "--end-date", ranges["validation_end"],
+            "--window-days", str(args.walk_forward_window_days),
+            "--step-days", str(args.walk_forward_step_days),
+            "--persist",
+        ],
+        allow_failure=True,
+    )
+
+    if validation_completed.returncode != 0:
+        if _looks_like_no_candidates_error(validation_completed):
+            print("walk-forward validation skipped: no top candidates", flush=True)
+            print("")
+            print("weekly cycle v4 結束（本輪無 candidate 可驗證）", flush=True)
+            print(f"symbol={args.symbol}", flush=True)
+            print(f"interval={args.interval}", flush=True)
+            print(f"train_start={ranges['train_start']}", flush=True)
+            print(f"train_end={ranges['train_end']}", flush=True)
+            print(f"validation_start={ranges['validation_start']}", flush=True)
+            print(f"validation_end={ranges['validation_end']}", flush=True)
+            return
+        raise subprocess.CalledProcessError(
+            validation_completed.returncode,
+            validation_completed.args,
+            output=validation_completed.stdout,
+            stderr=validation_completed.stderr,
+        )
 
     # Step 4: rebuild family performance summary from real candidate + walk-forward data
     family_summary_output = _run_and_capture([
