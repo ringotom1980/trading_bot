@@ -847,6 +847,21 @@ def _generate_candidates_from_seed(seed_params: dict[str, Any]) -> list[dict[str
     return candidates
 
 
+def _interleave_candidate_groups(groups: list[list[dict[str, Any]]]) -> list[dict[str, Any]]:
+    """
+    功能：把多個 seed 的候選交錯輸出，避免前面的 seed 吃掉 max-candidates 配額。
+    """
+    merged: list[dict[str, Any]] = []
+    max_len = max((len(group) for group in groups), default=0)
+
+    for idx in range(max_len):
+        for group in groups:
+            if idx < len(group):
+                merged.append(group[idx])
+
+    return merged
+
+
 def generate_param_candidates(
     *,
     base_params: dict[str, Any],
@@ -857,14 +872,17 @@ def generate_param_candidates(
         - 新增真正獨立的 base search seeds
         - 不再只圍繞 ACTIVE 附近微調
         - 每個 seed 內再做 threshold / profile / weights / combo 搜尋
+        - 改為 seed 交錯輸出，避免 seed_base_current 壟斷前段配額
         - 最後做全域 fingerprint 去重
     """
     seed_params_list = _build_seed_params(base_params)
-    all_candidates: list[dict[str, Any]] = []
 
+    per_seed_candidates: list[list[dict[str, Any]]] = []
     for seed_params in seed_params_list:
-        all_candidates.extend(_generate_candidates_from_seed(seed_params))
+        seed_candidates = _generate_candidates_from_seed(seed_params)
+        per_seed_candidates.append(seed_candidates)
 
-    valid_candidates = [params for params in all_candidates if _is_valid_candidate(params)]
+    interleaved_candidates = _interleave_candidate_groups(per_seed_candidates)
+    valid_candidates = [params for params in interleaved_candidates if _is_valid_candidate(params)]
     deduped_candidates = _dedupe_candidates(valid_candidates)
     return deduped_candidates
