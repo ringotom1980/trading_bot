@@ -6,8 +6,14 @@ Path: scripts/run_governor_cycle.py
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 import argparse
 import json
+import sys
+
+ROOT_DIR = Path(__file__).resolve().parents[1]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
 
 from governor.governor import run_governor_cycle
 
