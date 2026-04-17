@@ -17,6 +17,7 @@ from storage.repositories.search_space_config_repo import (
 
 from governor.analyzer import analyze_governor_inputs
 from governor.family_manager import build_family_actions
+from governor.feature_diagnostics import build_feature_actions
 from governor.search_space import build_next_search_space
 
 
@@ -33,6 +34,7 @@ def _build_default_search_space() -> dict[str, Any]:
             "trend_following_v1": 0.5,
             "mean_reversion_v1": 0.5,
         },
+        "feature_bias": {},
     }
 
 
@@ -83,10 +85,11 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                     "config_id": config_id,
                 }
             )
-
             current_config = default_config
+            active_config_id = config_id
         else:
             current_config = dict(active_config["config_json"] or {})
+            active_config_id = active_config["config_id"]
 
         analysis = analyze_governor_inputs(
             conn,
@@ -94,9 +97,12 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
             interval=interval,
         )
         family_actions = build_family_actions(analysis["families"])
+        feature_actions = build_feature_actions(analysis["features"])
+
         next_config = build_next_search_space(
             current_config,
             family_actions=family_actions,
+            feature_actions=feature_actions,
         )
 
         if _has_any_meaningful_change(
@@ -107,22 +113,23 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                 conn,
                 scope_key=scope_key,
                 config=next_config,
-                created_by="governor_family_adjust",
+                created_by="governor_family_feature_adjust",
             )
 
             decision_id = create_governor_decision(
                 conn,
                 run_key=run_key,
-                decision_type="FAMILY_WEIGHT_ADJUST",
+                decision_type="SEARCH_SPACE_ADJUST",
                 target_type="SEARCH_SPACE",
                 target_key=scope_key,
                 action="REPLACE",
                 before_value=current_config,
                 after_value=next_config,
                 reason={
-                    "type": "FAMILY_ACTIONS_APPLIED",
-                    "message": "依 family summary 調整 search space families 權重",
+                    "type": "FAMILY_AND_FEATURE_ACTIONS_APPLIED",
+                    "message": "依 family summary 與 feature diagnostics 調整 search space",
                     "family_actions": family_actions,
+                    "feature_actions": feature_actions,
                 },
             )
 
@@ -133,13 +140,14 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                     "target_key": scope_key,
                     "config_id": config_id,
                     "family_actions": family_actions,
+                    "feature_actions": feature_actions,
                 }
             )
         else:
             decision_id = create_governor_decision(
                 conn,
                 run_key=run_key,
-                decision_type="FAMILY_WEIGHT_ADJUST",
+                decision_type="SEARCH_SPACE_ADJUST",
                 target_type="SEARCH_SPACE",
                 target_key=scope_key,
                 action="KEEP",
@@ -147,20 +155,20 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                 after_value=current_config,
                 reason={
                     "type": "NO_CHANGE",
-                    "message": "family actions 未造成 search space 變化，維持現況",
+                    "message": "family / feature actions 未造成 search space 變化，維持現況",
                     "family_actions": family_actions,
+                    "feature_actions": feature_actions,
                 },
             )
-
-            config_id = active_config["config_id"] if active_config is not None else None
 
             decisions.append(
                 {
                     "decision_id": decision_id,
                     "action": "KEEP",
                     "target_key": scope_key,
-                    "config_id": config_id,
+                    "config_id": active_config_id,
                     "family_actions": family_actions,
+                    "feature_actions": feature_actions,
                 }
             )
 

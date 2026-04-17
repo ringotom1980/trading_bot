@@ -13,14 +13,22 @@ def build_next_search_space(
     current_config: dict[str, Any] | None,
     *,
     family_actions: list[dict[str, Any]] | None = None,
+    feature_actions: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     next_config = deepcopy(current_config or {})
-    families = dict(next_config.get("families") or {})
 
+    families = dict(next_config.get("families") or {})
     for item in family_actions or []:
         family_key = str(item["family_key"])
         target_weight = float(item["target_weight"])
         families[family_key] = target_weight
-
     next_config["families"] = families
+
+    feature_bias = dict(next_config.get("feature_bias") or {})
+    for item in feature_actions or []:
+        feature_key = str(item["feature_key"])
+        target_bias = float(item["target_bias"])
+        feature_bias[feature_key] = target_bias
+    next_config["feature_bias"] = feature_bias
+
     return next_config
