@@ -13,6 +13,7 @@ from typing import Any
 from strategy.decision import calculate_decision
 from strategy.features import calculate_feature_pack
 from strategy.signals import calculate_signal_scores
+
 DIAGNOSTIC_FEATURE_KEYS = [
     "rsi_14",
     "macd_hist",
@@ -37,9 +38,6 @@ def _calc_pnl(
     exit_price: float,
     qty: float,
 ) -> float:
-    """
-    功能：計算單筆交易 gross pnl。
-    """
     if side == "LONG":
         return (exit_price - entry_price) * qty
 
@@ -50,9 +48,6 @@ def _calc_pnl(
 
 
 def _to_bar_close_time_value(value: Any) -> int:
-    """
-    功能：將 close_time 統一轉為毫秒時間戳整數。
-    """
     if isinstance(value, datetime):
         return int(value.timestamp() * 1000)
 
@@ -60,9 +55,6 @@ def _to_bar_close_time_value(value: Any) -> int:
 
 
 def _calc_return_pct(*, side: str, entry_price: float, current_price: float) -> float:
-    """
-    功能：計算目前持倉報酬率。
-    """
     if entry_price == 0:
         return 0.0
 
@@ -76,10 +68,6 @@ def _calc_return_pct(*, side: str, entry_price: float, current_price: float) -> 
 
 
 def _apply_entry_slippage(*, side: str, price: float, slippage_rate: float) -> float:
-    """
-    功能：模擬進場滑價。
-    LONG 進場視為買貴一點；SHORT 進場視為賣低一點。
-    """
     if side == "LONG":
         return price * (1 + slippage_rate)
     if side == "SHORT":
@@ -88,10 +76,6 @@ def _apply_entry_slippage(*, side: str, price: float, slippage_rate: float) -> f
 
 
 def _apply_exit_slippage(*, side: str, price: float, slippage_rate: float) -> float:
-    """
-    功能：模擬出場滑價。
-    LONG 出場視為賣差一點；SHORT 出場視為買貴一點。
-    """
     if side == "LONG":
         return price * (1 - slippage_rate)
     if side == "SHORT":
@@ -108,19 +92,6 @@ def _resolve_risk_exit_price(
     hard_stop_loss_pct: float,
     take_profit_pct: float,
 ) -> tuple[str | None, float | None]:
-    """
-    功能：依 bar 的 high / low 判斷風控出場是否觸發，並回傳：
-        (reason_code, raw_exit_price)
-
-    規則：
-        - 若同一根同時碰到停損與停利，採保守口徑，優先視為停損
-        - LONG:
-            stop = entry * (1 - stop_loss_pct)
-            take = entry * (1 + take_profit_pct)
-        - SHORT:
-            stop = entry * (1 + stop_loss_pct)
-            take = entry * (1 - take_profit_pct)
-    """
     stop_loss_hit = False
     take_profit_hit = False
     stop_loss_price: float | None = None
@@ -155,9 +126,6 @@ def _resolve_risk_exit_price(
 
 
 def _build_entry_feature_snapshot(feature_pack: dict[str, Any]) -> dict[str, Any]:
-    """
-    功能：抽取進場當下的核心特徵快照，供回測診斷使用。
-    """
     snapshot: dict[str, Any] = {}
 
     for key in DIAGNOSTIC_FEATURE_KEYS:
@@ -165,6 +133,102 @@ def _build_entry_feature_snapshot(feature_pack: dict[str, Any]) -> dict[str, Any
             snapshot[key] = feature_pack[key]
 
     return snapshot
+
+
+def _build_open_position(
+    *,
+    strategy_version_id: int,
+    symbol: str,
+    interval: str,
+    side: str,
+    close_time: Any,
+    idx: int,
+    close_price: float,
+    qty: float,
+    fee_rate: float,
+    slippage_rate: float,
+    effective_decision: str,
+    effective_reason: str,
+    signal_scores: dict[str, Any],
+    feature_pack: dict[str, Any],
+) -> dict[str, Any]:
+    entry_price = _apply_entry_slippage(
+        side=side,
+        price=close_price,
+        slippage_rate=slippage_rate,
+    )
+    entry_fee = entry_price * qty * fee_rate
+
+    return {
+        "strategy_version_id": strategy_version_id,
+        "symbol": symbol,
+        "interval": interval,
+        "side": side,
+        "entry_price": entry_price,
+        "entry_qty": qty,
+        "entry_time": close_time,
+        "entry_bar_index": idx,
+        "entry_fee": entry_fee,
+        "entry_decision": effective_decision,
+        "entry_reason_code": effective_reason,
+        "entry_long_score": float(signal_scores["long_score"]),
+        "entry_short_score": float(signal_scores["short_score"]),
+        "entry_feature_snapshot": _build_entry_feature_snapshot(feature_pack),
+    }
+
+
+def _close_position(
+    *,
+    current_position: dict[str, Any],
+    close_time: Any,
+    close_price: float,
+    raw_exit_price: float,
+    qty: float,
+    fee_rate: float,
+    slippage_rate: float,
+    idx: int,
+    effective_reason: str,
+) -> tuple[dict[str, Any], float]:
+    exit_price = _apply_exit_slippage(
+        side=str(current_position["side"]),
+        price=raw_exit_price,
+        slippage_rate=slippage_rate,
+    )
+    gross_pnl = _calc_pnl(
+        side=current_position["side"],
+        entry_price=float(current_position["entry_price"]),
+        exit_price=exit_price,
+        qty=qty,
+    )
+    exit_fee = exit_price * qty * fee_rate
+    fees = float(current_position["entry_fee"]) + exit_fee
+    net_pnl = gross_pnl - fees
+    bars_held = idx - int(current_position["entry_bar_index"])
+
+    trade = {
+        "strategy_version_id": current_position["strategy_version_id"],
+        "symbol": current_position["symbol"],
+        "interval": current_position["interval"],
+        "side": current_position["side"],
+        "entry_time": current_position["entry_time"],
+        "exit_time": close_time,
+        "entry_price": float(current_position["entry_price"]),
+        "exit_price": exit_price,
+        "exit_trigger_price": raw_exit_price,
+        "exit_bar_close_price": close_price,
+        "qty": qty,
+        "gross_pnl": gross_pnl,
+        "fees": fees,
+        "net_pnl": net_pnl,
+        "bars_held": bars_held,
+        "entry_decision": current_position.get("entry_decision"),
+        "entry_reason_code": current_position.get("entry_reason_code"),
+        "entry_long_score": current_position.get("entry_long_score"),
+        "entry_short_score": current_position.get("entry_short_score"),
+        "entry_feature_snapshot": dict(current_position.get("entry_feature_snapshot") or {}),
+        "exit_reason": effective_reason,
+    }
+    return trade, net_pnl
 
 
 def run_backtest_replay(
@@ -175,14 +239,6 @@ def run_backtest_replay(
     interval: str,
     params: dict[str, Any],
 ) -> dict[str, Any]:
-    """
-    功能：執行 Backtest v3。
-    說明：
-        - 使用與 runtime 同源的 feature / signal / decision
-        - 以 historical_klines 逐根重放
-        - 支援 cooldown_bars / min_hold_bars / max_bars_hold
-        - 支援 hard_stop_loss_pct / take_profit_pct
-    """
     if len(klines) < 61:
         raise ValueError("回測資料不足，至少需要 61 根 K 線")
 
@@ -264,7 +320,7 @@ def run_backtest_replay(
                 effective_decision = "EXIT"
                 effective_reason = "MAX_BARS_HOLD_EXIT"
 
-            elif effective_decision == "EXIT" and bars_held < min_hold_bars:
+            elif effective_decision in {"EXIT", "REVERSE_TO_LONG", "REVERSE_TO_SHORT"} and bars_held < min_hold_bars:
                 effective_decision = "HOLD"
                 effective_reason = "MIN_HOLD_BLOCKED"
 
@@ -280,95 +336,55 @@ def run_backtest_replay(
 
         if current_position is None:
             if effective_decision == "ENTER_LONG":
-                entry_price = _apply_entry_slippage(
+                current_position = _build_open_position(
+                    strategy_version_id=strategy_version_id,
+                    symbol=symbol,
+                    interval=interval,
                     side="LONG",
-                    price=close_price,
+                    close_time=close_time,
+                    idx=idx,
+                    close_price=close_price,
+                    qty=qty,
+                    fee_rate=fee_rate,
                     slippage_rate=slippage_rate,
+                    effective_decision=effective_decision,
+                    effective_reason=effective_reason,
+                    signal_scores=signal_scores,
+                    feature_pack=feature_pack,
                 )
-                entry_fee = entry_price * qty * fee_rate
-                current_position = {
-                    "strategy_version_id": strategy_version_id,
-                    "symbol": symbol,
-                    "interval": interval,
-                    "side": "LONG",
-                    "entry_price": entry_price,
-                    "entry_qty": qty,
-                    "entry_time": close_time,
-                    "entry_bar_index": idx,
-                    "entry_fee": entry_fee,
-                    "entry_decision": effective_decision,
-                    "entry_reason_code": effective_reason,
-                    "entry_long_score": float(signal_scores["long_score"]),
-                    "entry_short_score": float(signal_scores["short_score"]),
-                    "entry_feature_snapshot": _build_entry_feature_snapshot(feature_pack),
-                }
 
             elif effective_decision == "ENTER_SHORT":
-                entry_price = _apply_entry_slippage(
+                current_position = _build_open_position(
+                    strategy_version_id=strategy_version_id,
+                    symbol=symbol,
+                    interval=interval,
                     side="SHORT",
-                    price=close_price,
+                    close_time=close_time,
+                    idx=idx,
+                    close_price=close_price,
+                    qty=qty,
+                    fee_rate=fee_rate,
                     slippage_rate=slippage_rate,
+                    effective_decision=effective_decision,
+                    effective_reason=effective_reason,
+                    signal_scores=signal_scores,
+                    feature_pack=feature_pack,
                 )
-                entry_fee = entry_price * qty * fee_rate
-                current_position = {
-                    "strategy_version_id": strategy_version_id,
-                    "symbol": symbol,
-                    "interval": interval,
-                    "side": "SHORT",
-                    "entry_price": entry_price,
-                    "entry_qty": qty,
-                    "entry_time": close_time,
-                    "entry_bar_index": idx,
-                    "entry_fee": entry_fee,
-                    "entry_decision": effective_decision,
-                    "entry_reason_code": effective_reason,
-                    "entry_long_score": float(signal_scores["long_score"]),
-                    "entry_short_score": float(signal_scores["short_score"]),
-                    "entry_feature_snapshot": _build_entry_feature_snapshot(feature_pack),
-                }
 
         else:
-            if effective_decision == "EXIT":
+            if effective_decision in {"EXIT", "REVERSE_TO_LONG", "REVERSE_TO_SHORT"}:
                 raw_exit_price = risk_exit_price if risk_exit_price is not None else close_price
-                exit_price = _apply_exit_slippage(
-                    side=str(current_position["side"]),
-                    price=raw_exit_price,
-                    slippage_rate=slippage_rate,
-                )
-                gross_pnl = _calc_pnl(
-                    side=current_position["side"],
-                    entry_price=float(current_position["entry_price"]),
-                    exit_price=exit_price,
+                trade, net_pnl = _close_position(
+                    current_position=current_position,
+                    close_time=close_time,
+                    close_price=close_price,
+                    raw_exit_price=raw_exit_price,
                     qty=qty,
+                    fee_rate=fee_rate,
+                    slippage_rate=slippage_rate,
+                    idx=idx,
+                    effective_reason=effective_reason,
                 )
-                exit_fee = exit_price * qty * fee_rate
-                fees = float(current_position["entry_fee"]) + exit_fee
-                net_pnl = gross_pnl - fees
-                bars_held = idx - int(current_position["entry_bar_index"])
-
-                trade = {
-                    "strategy_version_id": strategy_version_id,
-                    "symbol": symbol,
-                    "interval": interval,
-                    "side": current_position["side"],
-                    "entry_time": current_position["entry_time"],
-                    "exit_time": close_time,
-                    "entry_price": float(current_position["entry_price"]),
-                    "exit_price": exit_price,
-                    "exit_trigger_price": raw_exit_price,
-                    "exit_bar_close_price": close_price,
-                    "qty": qty,
-                    "gross_pnl": gross_pnl,
-                    "fees": fees,
-                    "net_pnl": net_pnl,
-                    "bars_held": bars_held,
-                    "entry_decision": current_position.get("entry_decision"),
-                    "entry_reason_code": current_position.get("entry_reason_code"),
-                    "entry_long_score": current_position.get("entry_long_score"),
-                    "entry_short_score": current_position.get("entry_short_score"),
-                    "entry_feature_snapshot": dict(current_position.get("entry_feature_snapshot") or {}),
-                    "exit_reason": effective_reason,
-                }
                 trades.append(trade)
 
                 equity += net_pnl
@@ -376,50 +392,67 @@ def run_backtest_replay(
                 current_position = None
                 last_exit_bar_index = idx
 
+                if effective_decision == "REVERSE_TO_LONG":
+                    current_position = _build_open_position(
+                        strategy_version_id=strategy_version_id,
+                        symbol=symbol,
+                        interval=interval,
+                        side="LONG",
+                        close_time=close_time,
+                        idx=idx,
+                        close_price=close_price,
+                        qty=qty,
+                        fee_rate=fee_rate,
+                        slippage_rate=slippage_rate,
+                        effective_decision=effective_decision,
+                        effective_reason=effective_reason,
+                        signal_scores=signal_scores,
+                        feature_pack=feature_pack,
+                    )
+
+                elif effective_decision == "REVERSE_TO_SHORT":
+                    current_position = _build_open_position(
+                        strategy_version_id=strategy_version_id,
+                        symbol=symbol,
+                        interval=interval,
+                        side="SHORT",
+                        close_time=close_time,
+                        idx=idx,
+                        close_price=close_price,
+                        qty=qty,
+                        fee_rate=fee_rate,
+                        slippage_rate=slippage_rate,
+                        effective_decision=effective_decision,
+                        effective_reason=effective_reason,
+                        signal_scores=signal_scores,
+                        feature_pack=feature_pack,
+                    )
+
+        if current_position is not None:
+            mark_price = close_price
+            mark_return_pct = _calc_return_pct(
+                side=str(current_position["side"]),
+                entry_price=float(current_position["entry_price"]),
+                current_price=mark_price,
+            )
+            current_position["mark_return_pct"] = mark_return_pct
+
     if current_position is not None:
         last_bar = klines[-1]
         final_close_price = float(last_bar["close"])
         final_close_time = last_bar["close_time"]
-        final_exit_price = _apply_exit_slippage(
-            side=str(current_position["side"]),
-            price=final_close_price,
-            slippage_rate=slippage_rate,
-        )
 
-        gross_pnl = _calc_pnl(
-            side=current_position["side"],
-            entry_price=float(current_position["entry_price"]),
-            exit_price=final_exit_price,
+        trade, net_pnl = _close_position(
+            current_position=current_position,
+            close_time=final_close_time,
+            close_price=final_close_price,
+            raw_exit_price=final_close_price,
             qty=qty,
+            fee_rate=fee_rate,
+            slippage_rate=slippage_rate,
+            idx=len(klines) - 1,
+            effective_reason="FORCED_END_OF_BACKTEST",
         )
-        exit_fee = final_exit_price * qty * fee_rate
-        fees = float(current_position["entry_fee"]) + exit_fee
-        net_pnl = gross_pnl - fees
-        bars_held = (len(klines) - 1) - int(current_position["entry_bar_index"])
-
-        trade = {
-            "strategy_version_id": strategy_version_id,
-            "symbol": symbol,
-            "interval": interval,
-            "side": current_position["side"],
-            "entry_time": current_position["entry_time"],
-            "exit_time": final_close_time,
-            "entry_price": float(current_position["entry_price"]),
-            "exit_price": final_exit_price,
-            "exit_trigger_price": final_close_price,
-            "exit_bar_close_price": final_close_price,
-            "qty": qty,
-            "gross_pnl": gross_pnl,
-            "fees": fees,
-            "net_pnl": net_pnl,
-            "bars_held": bars_held,
-            "entry_decision": current_position.get("entry_decision"),
-            "entry_reason_code": current_position.get("entry_reason_code"),
-            "entry_long_score": current_position.get("entry_long_score"),
-            "entry_short_score": current_position.get("entry_short_score"),
-            "entry_feature_snapshot": dict(current_position.get("entry_feature_snapshot") or {}),
-            "exit_reason": "FORCED_END_OF_BACKTEST",
-        }
         trades.append(trade)
 
         equity += net_pnl

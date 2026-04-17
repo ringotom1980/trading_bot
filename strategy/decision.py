@@ -121,10 +121,10 @@ def decide_with_long_position(
 
     if short_score >= reverse_threshold and (short_score - long_score) >= reverse_gap:
         return build_decision_result(
-            decision="EXIT",
+            decision="REVERSE_TO_SHORT",
             decision_score=short_score,
             reason_code="REVERSE_SIGNAL",
-            reason_summary="目前持有 LONG，但 short_score 達反向門檻且明顯強於 long_score，先退出",
+            reason_summary="目前持有 LONG，short_score 達反向門檻且明顯強於 long_score，反手為 SHORT",
             long_score=long_score,
             short_score=short_score,
         )
@@ -139,12 +139,12 @@ def decide_with_long_position(
             short_score=short_score,
         )
 
-    if long_score < hold_min_score and (long_score - short_score) <= exit_gap:
+    if long_score < hold_min_score and (short_score - long_score) >= exit_gap:
         return build_decision_result(
             decision="EXIT",
             decision_score=long_score,
             reason_code="EDGE_LOST",
-            reason_summary="目前持有 LONG，long_score 偏弱且優勢差不足，先退出",
+            reason_summary="目前持有 LONG，對手分數已明顯反超，先退出",
             long_score=long_score,
             short_score=short_score,
         )
@@ -172,10 +172,10 @@ def decide_with_short_position(
 
     if long_score >= reverse_threshold and (long_score - short_score) >= reverse_gap:
         return build_decision_result(
-            decision="EXIT",
+            decision="REVERSE_TO_LONG",
             decision_score=long_score,
             reason_code="REVERSE_SIGNAL",
-            reason_summary="目前持有 SHORT，但 long_score 達反向門檻且明顯強於 short_score，先退出",
+            reason_summary="目前持有 SHORT，long_score 達反向門檻且明顯強於 short_score，反手為 LONG",
             long_score=long_score,
             short_score=short_score,
         )
@@ -190,12 +190,12 @@ def decide_with_short_position(
             short_score=short_score,
         )
 
-    if short_score < hold_min_score and (short_score - long_score) <= exit_gap:
+    if short_score < hold_min_score and (long_score - short_score) >= exit_gap:
         return build_decision_result(
             decision="EXIT",
             decision_score=short_score,
             reason_code="EDGE_LOST",
-            reason_summary="目前持有 SHORT，short_score 偏弱且優勢差不足，先退出",
+            reason_summary="目前持有 SHORT，對手分數已明顯反超，先退出",
             long_score=long_score,
             short_score=short_score,
         )
