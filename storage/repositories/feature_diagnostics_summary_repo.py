@@ -152,3 +152,36 @@ def get_top_feature_diagnostics_summaries(
         rows = cursor.fetchall()
 
     return [_row_to_feature_diagnostics_summary(row) for row in rows]
+
+
+def get_recent_feature_diagnostics_summaries(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+    limit: int = 1000,
+) -> list[dict[str, Any]]:
+    sql = """
+    SELECT
+        summary_id,
+        feature_key,
+        symbol,
+        interval,
+        winner_avg,
+        loser_avg,
+        winner_count,
+        loser_count,
+        diagnostic_score,
+        updated_at
+    FROM feature_diagnostics_summary
+    WHERE symbol = %s
+      AND interval = %s
+    ORDER BY updated_at DESC, summary_id DESC
+    LIMIT %s
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (symbol, interval, limit))
+        rows = cursor.fetchall()
+
+    return [_row_to_feature_diagnostics_summary(row) for row in rows]
