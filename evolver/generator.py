@@ -1,7 +1,10 @@
 """
 Path: evolver/generator.py
-說明：Candidate Generator v7，擴充 hold / risk / entry-reverse / 非對稱 weights 候選族群，
-並保留 candidate 去重 / 指紋化，降低同質候選。
+說明：Candidate Generator v8
+- 加入真正獨立的 base search seeds
+- 不再只圍繞目前 ACTIVE strategy 微調
+- 保留 threshold / profile / weights / combo 搜尋
+- 保留 fingerprint 去重
 """
 
 from __future__ import annotations
@@ -285,7 +288,7 @@ PROFILE_TEMPLATES: list[dict[str, Any]] = [
             "reverse_gap": 0.09,
         },
     },
-        {
+    {
         "name": "entry_strict",
         "overrides": {
             "entry_threshold": 0.68,
@@ -313,6 +316,104 @@ PROFILE_TEMPLATES: list[dict[str, Any]] = [
             "hard_stop_loss_pct": 0.012,
             "take_profit_pct": 0.0,
         },
+    },
+]
+
+BASE_SEARCH_SEEDS: list[dict[str, Any]] = [
+    {
+        "name": "seed_base_current",
+        "overrides": {},
+        "weight_template": None,
+    },
+    {
+        "name": "seed_trend_balanced",
+        "overrides": {
+            "entry_threshold": 0.56,
+            "exit_threshold": 0.38,
+            "reverse_threshold": 0.66,
+            "reverse_gap": 0.10,
+            "hard_stop_loss_pct": 0.015,
+            "take_profit_pct": 0.03,
+            "cooldown_bars": 2,
+            "min_hold_bars": 2,
+            "max_bars_hold": 24,
+        },
+        "weight_template": "trend_up",
+    },
+    {
+        "name": "seed_momentum_balanced",
+        "overrides": {
+            "entry_threshold": 0.54,
+            "exit_threshold": 0.36,
+            "reverse_threshold": 0.64,
+            "reverse_gap": 0.09,
+            "hard_stop_loss_pct": 0.015,
+            "take_profit_pct": 0.03,
+            "cooldown_bars": 2,
+            "min_hold_bars": 1,
+            "max_bars_hold": 18,
+        },
+        "weight_template": "momentum_up",
+    },
+    {
+        "name": "seed_volume_combo",
+        "overrides": {
+            "entry_threshold": 0.52,
+            "exit_threshold": 0.35,
+            "reverse_threshold": 0.63,
+            "reverse_gap": 0.08,
+            "hard_stop_loss_pct": 0.014,
+            "take_profit_pct": 0.025,
+            "cooldown_bars": 1,
+            "min_hold_bars": 1,
+            "max_bars_hold": 18,
+        },
+        "weight_template": "volume_momentum_combo",
+    },
+    {
+        "name": "seed_conservative",
+        "overrides": {
+            "entry_threshold": 0.62,
+            "exit_threshold": 0.42,
+            "reverse_threshold": 0.74,
+            "reverse_gap": 0.12,
+            "hard_stop_loss_pct": 0.012,
+            "take_profit_pct": 0.025,
+            "cooldown_bars": 4,
+            "min_hold_bars": 2,
+            "max_bars_hold": 24,
+        },
+        "weight_template": "trend_only",
+    },
+    {
+        "name": "seed_aggressive",
+        "overrides": {
+            "entry_threshold": 0.48,
+            "exit_threshold": 0.34,
+            "reverse_threshold": 0.60,
+            "reverse_gap": 0.08,
+            "hard_stop_loss_pct": 0.02,
+            "take_profit_pct": 0.04,
+            "cooldown_bars": 1,
+            "min_hold_bars": 1,
+            "max_bars_hold": 12,
+        },
+        "weight_template": "momentum_only",
+    },
+    {
+        "name": "seed_asymmetric_trend_momentum",
+        "overrides": {
+            "entry_threshold": 0.55,
+            "exit_threshold": 0.36,
+            "reverse_threshold": 0.65,
+            "reverse_gap": 0.10,
+            "hard_stop_loss_pct": 0.015,
+            "take_profit_pct": 0.03,
+            "cooldown_bars": 2,
+            "min_hold_bars": 1,
+            "max_bars_hold": 20,
+        },
+        "weight_template": "long_trend_short_momentum",
     },
 ]
 
@@ -353,6 +454,9 @@ def _apply_safe_defaults(params: dict[str, Any]) -> dict[str, Any]:
 
     if "take_profit_pct" not in normalized:
         normalized["take_profit_pct"] = 0.0
+
+    if int(normalized.get("cooldown_bars", -1)) < 0:
+        normalized["cooldown_bars"] = 1
 
     if int(normalized.get("min_hold_bars", 0)) <= 0:
         normalized["min_hold_bars"] = 1
@@ -441,6 +545,67 @@ def _canonicalize_params(params: dict[str, Any]) -> dict[str, Any]:
 def _build_candidate_fingerprint(params: dict[str, Any]) -> str:
     canonical = _canonicalize_params(params)
     return json.dumps(canonical, ensure_ascii=False, sort_keys=True)
+
+
+def _find_weight_template_by_name(name: str) -> dict[str, Any] | None:
+    for template in WEIGHT_MUTATION_TEMPLATES:
+        if str(template.get("name")) == name:
+            return template
+    return None
+
+
+def _apply_weight_template(
+    *,
+    base_weights: dict[str, dict[str, float]],
+    template_name: str | None,
+) -> dict[str, dict[str, float]]:
+    if not template_name:
+        return {
+            "long": _normalize_weight_map(base_weights["long"]),
+            "short": _normalize_weight_map(base_weights["short"]),
+        }
+
+    template = _find_weight_template_by_name(template_name)
+    if template is None:
+        return {
+            "long": _normalize_weight_map(base_weights["long"]),
+            "short": _normalize_weight_map(base_weights["short"]),
+        }
+
+    result: dict[str, dict[str, float]] = {"long": {}, "short": {}}
+    for side in ("long", "short"):
+        mutated = dict(base_weights[side])
+        side_delta = template.get(side, {})
+        for key, delta in side_delta.items():
+            if key not in mutated:
+                continue
+            mutated[key] = _clamp_float(mutated[key] + float(delta), 0.000001, 0.95)
+        result[side] = _normalize_weight_map(mutated)
+
+    return result
+
+
+def _build_seed_params(base_params: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized_base = _apply_safe_defaults(base_params)
+    resolved_base_weights = _resolve_base_weights(normalized_base)
+
+    seeds: list[dict[str, Any]] = []
+
+    for seed in BASE_SEARCH_SEEDS:
+        params = _copy_params(normalized_base)
+
+        for key, value in dict(seed.get("overrides") or {}).items():
+            params[key] = value
+
+        params["weights"] = _apply_weight_template(
+            base_weights=resolved_base_weights,
+            template_name=seed.get("weight_template"),
+        )
+        params["mutation_tag"] = str(seed["name"])
+        params["seed_tag"] = str(seed["name"])
+        seeds.append(_apply_safe_defaults(params))
+
+    return seeds
 
 
 def _build_weight_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
@@ -535,7 +700,7 @@ def _build_profile_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]
             params[key] = value
 
         params["mutation_tag"] = template["name"]
-        variants.append(params)
+        variants.append(_apply_safe_defaults(params))
 
     return variants
 
@@ -553,25 +718,18 @@ def _is_valid_candidate(params: dict[str, Any]) -> bool:
 
     if exit_threshold >= entry_threshold:
         return False
-
     if reverse_threshold < entry_threshold:
         return False
-
     if reverse_gap <= 0:
         return False
-
     if cooldown_bars < 0:
         return False
-
     if min_hold_bars >= max_bars_hold:
         return False
-
     if hard_stop_loss_pct <= 0:
         return False
-
     if take_profit_pct < 0:
         return False
-
     if take_profit_pct > 0 and take_profit_pct <= hard_stop_loss_pct:
         return False
 
@@ -581,7 +739,6 @@ def _is_valid_candidate(params: dict[str, Any]) -> bool:
 
     long_weights = weights.get("long")
     short_weights = weights.get("short")
-
     if not isinstance(long_weights, dict) or not isinstance(short_weights, dict):
         return False
 
@@ -608,45 +765,32 @@ def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
     return deduped
 
 
-def generate_param_candidates(
-    *,
-    base_params: dict[str, Any],
-) -> list[dict[str, Any]]:
-    """
-    功能：根據 base strategy 產生第七版候選參數組合。
-    說明：
-        - 擴充 hold / risk / entry-reverse profile
-        - 擴充非對稱 weight families
-        - 保留 threshold / int 微調
-        - 保留 fingerprint 去重
-    """
-    normalized_base = _apply_safe_defaults(base_params)
-    normalized_base["weights"] = _build_weight_variants(normalized_base)[0]["weights"]
-
-    weight_variants = _build_weight_variants(normalized_base)
-    threshold_variants = _build_threshold_variants(normalized_base)
-    profile_variants = _build_profile_variants(normalized_base)
+def _generate_candidates_from_seed(seed_params: dict[str, Any]) -> list[dict[str, Any]]:
+    normalized_seed = _apply_safe_defaults(seed_params)
+    weight_variants = _build_weight_variants(normalized_seed)
+    threshold_variants = _build_threshold_variants(normalized_seed)
+    profile_variants = _build_profile_variants(normalized_seed)
 
     candidates: list[dict[str, Any]] = []
-    candidates.append(normalized_base)
+    candidates.append(normalized_seed)
 
-    # 純 weights
     for params in weight_variants[1:]:
+        params["seed_tag"] = normalized_seed.get("seed_tag")
         candidates.append(params)
 
-    # 純 threshold/int
     for params in threshold_variants:
         if "weights" not in params:
-            params["weights"] = deepcopy(normalized_base["weights"])
+            params["weights"] = deepcopy(normalized_seed["weights"])
+        params["seed_tag"] = normalized_seed.get("seed_tag")
         candidates.append(params)
 
-    # 純 profile
     for params in profile_variants:
         if "weights" not in params:
-            params["weights"] = deepcopy(normalized_base["weights"])
+            params["weights"] = deepcopy(normalized_seed["weights"])
+        params["seed_tag"] = normalized_seed.get("seed_tag")
         candidates.append(params)
 
-    selected_threshold_variants = threshold_variants[:28]
+    selected_threshold_variants = threshold_variants[:20]
     selected_weight_variants = [
         p for p in weight_variants[1:]
         if str(p.get("mutation_tag")) in {
@@ -654,49 +798,73 @@ def generate_param_candidates(
             "momentum_up",
             "volume_up",
             "volume_momentum_combo",
+            "trend_only",
+            "momentum_only",
             "long_trend_short_momentum",
             "long_momentum_short_trend",
         }
     ]
-    selected_profile_variants = profile_variants[:10]
+    selected_profile_variants = profile_variants[:8]
 
-    # threshold + weight
     for threshold_params in selected_threshold_variants:
         for weight_params in selected_weight_variants:
             merged = _copy_params(threshold_params)
             merged["weights"] = deepcopy(weight_params["weights"])
+            merged["seed_tag"] = normalized_seed.get("seed_tag")
 
             threshold_tag = threshold_params.get("mutation_tag", "threshold")
             weight_tag = weight_params.get("mutation_tag", "weight")
             merged["mutation_tag"] = f"{threshold_tag}+{weight_tag}"
             candidates.append(merged)
 
-    # profile + weight
     for profile_params in selected_profile_variants:
         for weight_params in selected_weight_variants:
             merged = _copy_params(profile_params)
             merged["weights"] = deepcopy(weight_params["weights"])
+            merged["seed_tag"] = normalized_seed.get("seed_tag")
 
             profile_tag = profile_params.get("mutation_tag", "profile")
             weight_tag = weight_params.get("mutation_tag", "weight")
             merged["mutation_tag"] = f"{profile_tag}+{weight_tag}"
             candidates.append(merged)
 
-    # profile + threshold
     for profile_params in selected_profile_variants[:4]:
-        for threshold_params in selected_threshold_variants[:8]:
+        for threshold_params in selected_threshold_variants[:6]:
             merged = _copy_params(profile_params)
             for key, value in threshold_params.items():
-                if key in {"weights", "mutation_tag"}:
+                if key in {"weights", "mutation_tag", "seed_tag"}:
                     continue
                 merged[key] = value
 
-            merged["weights"] = deepcopy(normalized_base["weights"])
+            merged["weights"] = deepcopy(normalized_seed["weights"])
+            merged["seed_tag"] = normalized_seed.get("seed_tag")
+
             profile_tag = profile_params.get("mutation_tag", "profile")
             threshold_tag = threshold_params.get("mutation_tag", "threshold")
             merged["mutation_tag"] = f"{profile_tag}+{threshold_tag}"
             candidates.append(merged)
 
-    valid_candidates = [params for params in candidates if _is_valid_candidate(params)]
+    return candidates
+
+
+def generate_param_candidates(
+    *,
+    base_params: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """
+    功能：根據 base strategy 產生第八版候選參數組合。
+    說明：
+        - 新增真正獨立的 base search seeds
+        - 不再只圍繞 ACTIVE 附近微調
+        - 每個 seed 內再做 threshold / profile / weights / combo 搜尋
+        - 最後做全域 fingerprint 去重
+    """
+    seed_params_list = _build_seed_params(base_params)
+    all_candidates: list[dict[str, Any]] = []
+
+    for seed_params in seed_params_list:
+        all_candidates.extend(_generate_candidates_from_seed(seed_params))
+
+    valid_candidates = [params for params in all_candidates if _is_valid_candidate(params)]
     deduped_candidates = _dedupe_candidates(valid_candidates)
     return deduped_candidates
