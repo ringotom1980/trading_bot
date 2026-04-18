@@ -62,6 +62,26 @@ def _build_search_space_actions(
 
     summary = dict(analysis.get("search_space_summary") or {})
     status = str(summary.get("status") or "")
+    candidate_count = int(summary.get("candidate_count", 0))
+    negative_count = int(summary.get("negative_net_pnl_count", 0))
+    reject_reason_summary = dict(summary.get("reject_reason_summary") or {})
+
+    if candidate_count <= 0:
+        search_space_actions.append(
+            {
+                "action": "KEEP",
+                "reason": {
+                    "type": "NO_CANDIDATES",
+                    "message": "目前無可用 candidate summary，維持現況",
+                    "summary": summary,
+                },
+            }
+        )
+        return search_space_actions
+
+    negative_ratio = negative_count / candidate_count
+    low_trade_count = int(reject_reason_summary.get("TOTAL_TRADES_TOO_LOW", 0))
+    low_trade_ratio = low_trade_count / candidate_count
 
     if status == "ALL_FAILED_NET_PNL_NOT_POSITIVE":
         search_space_actions.append(
@@ -74,18 +94,50 @@ def _build_search_space_actions(
                 },
             }
         )
-    else:
+        return search_space_actions
+
+    if negative_ratio >= 0.80 and low_trade_ratio <= 0.25:
         search_space_actions.append(
             {
-                "action": "KEEP",
+                "action": "TIGHTEN_SOFT",
                 "reason": {
-                    "type": "NO_SEARCH_SPACE_CHANGE",
-                    "message": "目前沒有觸發 search space 收斂條件",
+                    "type": "MOSTLY_NEGATIVE_NET_PNL",
+                    "message": "大多數候選仍為負報酬，且交易過少比例不高，先做溫和收緊",
                     "summary": summary,
+                    "negative_ratio": negative_ratio,
+                    "low_trade_ratio": low_trade_ratio,
                 },
             }
         )
+        return search_space_actions
 
+    if low_trade_ratio >= 0.40:
+        search_space_actions.append(
+            {
+                "action": "LOOSEN",
+                "reason": {
+                    "type": "TOO_MANY_LOW_TRADE_CANDIDATES",
+                    "message": "交易過少比例偏高，下一輪略放鬆 entry 條件",
+                    "summary": summary,
+                    "negative_ratio": negative_ratio,
+                    "low_trade_ratio": low_trade_ratio,
+                },
+            }
+        )
+        return search_space_actions
+
+    search_space_actions.append(
+        {
+            "action": "KEEP",
+            "reason": {
+                "type": "NO_SEARCH_SPACE_CHANGE",
+                "message": "目前沒有觸發 search space 調整條件",
+                "summary": summary,
+                "negative_ratio": negative_ratio,
+                "low_trade_ratio": low_trade_ratio,
+            },
+        }
+    )
     return search_space_actions
 
 
