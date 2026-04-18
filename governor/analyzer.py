@@ -14,7 +14,7 @@ from storage.repositories.feature_diagnostics_summary_repo import (
     get_recent_feature_diagnostics_summaries,
 )
 from storage.repositories.strategy_candidates_repo import (
-    get_recent_strategy_candidates,
+    get_latest_run_strategy_candidates,
 )
 
 
@@ -66,11 +66,10 @@ def analyze_governor_inputs(
         interval=interval,
         limit=200,
     )
-    candidate_rows = get_recent_strategy_candidates(
+    candidate_rows = get_latest_run_strategy_candidates(
         conn,
         symbol=symbol,
         interval=interval,
-        limit=200,
     )
 
     return {

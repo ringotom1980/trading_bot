@@ -404,3 +404,78 @@ def get_strategy_candidates_by_ids(
         rows = cursor.fetchall()
 
     return [_row_to_strategy_candidate(row) for row in rows]
+
+
+def get_latest_run_strategy_candidates(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+) -> list[dict[str, Any]]:
+    """
+    功能：抓指定 symbol / interval 最新一輪 tested_range 的所有 candidate。
+    規則：
+        - 先找最新一筆 candidate 的 tested_range_start / tested_range_end / source_strategy_version_id
+        - 再把同一輪全部 candidate 抓出來
+    """
+    latest_sql = """
+    SELECT
+        source_strategy_version_id,
+        tested_range_start,
+        tested_range_end
+    FROM strategy_candidates
+    WHERE symbol = %s
+      AND interval = %s
+    ORDER BY created_at DESC, candidate_id DESC
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(latest_sql, (symbol, interval))
+        latest_row = cursor.fetchone()
+
+    if latest_row is None:
+        return []
+
+    source_strategy_version_id = int(latest_row[0])
+    tested_range_start = latest_row[1]
+    tested_range_end = latest_row[2]
+
+    sql = """
+    SELECT
+        candidate_id,
+        source_strategy_version_id,
+        symbol,
+        interval,
+        tested_range_start,
+        tested_range_end,
+        candidate_no,
+        params_json,
+        metrics_json,
+        rank_score,
+        candidate_status,
+        note,
+        created_at
+    FROM strategy_candidates
+    WHERE source_strategy_version_id = %s
+      AND symbol = %s
+      AND interval = %s
+      AND tested_range_start = %s
+      AND tested_range_end = %s
+    ORDER BY candidate_no ASC, candidate_id ASC
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                source_strategy_version_id,
+                symbol,
+                interval,
+                tested_range_start,
+                tested_range_end,
+            ),
+        )
+        rows = cursor.fetchall()
+
+    return [_row_to_strategy_candidate(row) for row in rows]
