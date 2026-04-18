@@ -16,6 +16,77 @@ from typing import Any
 from strategy.signals import DEFAULT_WEIGHTS
 
 
+def _deep_merge_dict(base: dict[str, Any], override: dict[str, Any]) -> dict[str, Any]:
+    result = deepcopy(base)
+
+    for key, value in override.items():
+        if isinstance(value, dict) and isinstance(result.get(key), dict):
+            result[key] = _deep_merge_dict(result[key], value)
+        else:
+            result[key] = deepcopy(value)
+
+    return result
+
+
+def _get_search_space_section(
+    search_space: dict[str, Any] | None,
+    key: str,
+    default_value: Any,
+) -> Any:
+    if not isinstance(search_space, dict):
+        return deepcopy(default_value)
+
+    value = search_space.get(key)
+    if value is None:
+        return deepcopy(default_value)
+
+    return deepcopy(value)
+
+
+def _build_search_space_overrides(
+    search_space: dict[str, Any] | None,
+) -> tuple[
+    dict[str, tuple[list[float], int]],
+    dict[str, list[int]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+]:
+    threshold_specs = _get_search_space_section(
+        search_space,
+        "threshold_field_specs",
+        THRESHOLD_FIELD_SPECS,
+    )
+    int_specs = _get_search_space_section(
+        search_space,
+        "int_field_specs",
+        INT_FIELD_SPECS,
+    )
+    weight_templates = _get_search_space_section(
+        search_space,
+        "weight_mutation_templates",
+        WEIGHT_MUTATION_TEMPLATES,
+    )
+    profile_templates = _get_search_space_section(
+        search_space,
+        "profile_templates",
+        PROFILE_TEMPLATES,
+    )
+    base_search_seeds = _get_search_space_section(
+        search_space,
+        "base_search_seeds",
+        BASE_SEARCH_SEEDS,
+    )
+
+    return (
+        threshold_specs,
+        int_specs,
+        weight_templates,
+        profile_templates,
+        base_search_seeds,
+    )
+
+
 THRESHOLD_FIELD_SPECS: dict[str, tuple[list[float], int]] = {
     "entry_threshold": ([-0.18, -0.12, -0.08, -0.05, 0.03, 0.05, 0.08, 0.12], 4),
     "exit_threshold": ([-0.12, -0.08, -0.05, 0.05, 0.08, 0.12], 4),
@@ -579,8 +650,12 @@ def _build_candidate_fingerprint(params: dict[str, Any]) -> str:
     return json.dumps(canonical, ensure_ascii=False, sort_keys=True)
 
 
-def _find_weight_template_by_name(name: str) -> dict[str, Any] | None:
-    for template in WEIGHT_MUTATION_TEMPLATES:
+def _find_weight_template_by_name(
+    name: str,
+    *,
+    weight_templates: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    for template in weight_templates:
         if str(template.get("name")) == name:
             return template
     return None
@@ -590,6 +665,7 @@ def _apply_weight_template(
     *,
     base_weights: dict[str, dict[str, float]],
     template_name: str | None,
+    weight_templates: list[dict[str, Any]],
 ) -> dict[str, dict[str, float]]:
     if not template_name:
         return {
@@ -597,7 +673,10 @@ def _apply_weight_template(
             "short": _normalize_weight_map(base_weights["short"]),
         }
 
-    template = _find_weight_template_by_name(template_name)
+    template = _find_weight_template_by_name(
+        template_name,
+        weight_templates=weight_templates,
+    )
     if template is None:
         return {
             "long": _normalize_weight_map(base_weights["long"]),
@@ -617,13 +696,18 @@ def _apply_weight_template(
     return result
 
 
-def _build_seed_params(base_params: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_seed_params(
+    base_params: dict[str, Any],
+    *,
+    base_search_seeds: list[dict[str, Any]],
+    weight_templates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     normalized_base = _apply_safe_defaults(base_params)
     resolved_base_weights = _resolve_base_weights(normalized_base)
 
     seeds: list[dict[str, Any]] = []
 
-    for seed in BASE_SEARCH_SEEDS:
+    for seed in base_search_seeds:
         params = _copy_params(normalized_base)
 
         for key, value in dict(seed.get("overrides") or {}).items():
@@ -632,6 +716,7 @@ def _build_seed_params(base_params: dict[str, Any]) -> list[dict[str, Any]]:
         params["weights"] = _apply_weight_template(
             base_weights=resolved_base_weights,
             template_name=seed.get("weight_template"),
+            weight_templates=weight_templates,
         )
         params["mutation_tag"] = str(seed["name"])
         params["seed_tag"] = str(seed["name"])
@@ -640,7 +725,11 @@ def _build_seed_params(base_params: dict[str, Any]) -> list[dict[str, Any]]:
     return seeds
 
 
-def _build_weight_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_weight_variants(
+    base_params: dict[str, Any],
+    *,
+    weight_templates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     base_params = _apply_safe_defaults(base_params)
     base_weights = _resolve_base_weights(base_params)
     variants: list[dict[str, Any]] = []
@@ -652,7 +741,7 @@ def _build_weight_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
     }
     variants.append(base_candidate)
 
-    for template in WEIGHT_MUTATION_TEMPLATES:
+    for template in weight_templates:
         params = _copy_params(base_params)
         params["mutation_tag"] = template["name"]
         params["weights"] = {"long": {}, "short": {}}
@@ -673,11 +762,16 @@ def _build_weight_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
     return variants
 
 
-def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_threshold_variants(
+    base_params: dict[str, Any],
+    *,
+    threshold_field_specs: dict[str, tuple[list[float], int]],
+    int_field_specs: dict[str, list[int]],
+) -> list[dict[str, Any]]:
     base_params = _apply_safe_defaults(base_params)
     variants: list[dict[str, Any]] = []
 
-    for field, (deltas, digits) in THRESHOLD_FIELD_SPECS.items():
+    for field, (deltas, digits) in threshold_field_specs.items():
         base_value = float(base_params.get(field, 0.0))
         for delta in deltas:
             params = _copy_params(base_params)
@@ -699,7 +793,7 @@ def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any
             params["mutation_tag"] = f"{field}:{delta:+}"
             variants.append(params)
 
-    for field, deltas in INT_FIELD_SPECS.items():
+    for field, deltas in int_field_specs.items():
         base_value = int(base_params.get(field, 0))
         for delta in deltas:
             params = _copy_params(base_params)
@@ -721,11 +815,15 @@ def _build_threshold_variants(base_params: dict[str, Any]) -> list[dict[str, Any
     return variants
 
 
-def _build_profile_variants(base_params: dict[str, Any]) -> list[dict[str, Any]]:
+def _build_profile_variants(
+    base_params: dict[str, Any],
+    *,
+    profile_templates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     base_params = _apply_safe_defaults(base_params)
     variants: list[dict[str, Any]] = []
 
-    for template in PROFILE_TEMPLATES:
+    for template in profile_templates:
         params = _copy_params(base_params)
 
         for key, value in template.get("overrides", {}).items():
@@ -797,11 +895,28 @@ def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
     return deduped
 
 
-def _generate_candidates_from_seed(seed_params: dict[str, Any]) -> list[dict[str, Any]]:
+def _generate_candidates_from_seed(
+    seed_params: dict[str, Any],
+    *,
+    threshold_field_specs: dict[str, tuple[list[float], int]],
+    int_field_specs: dict[str, list[int]],
+    weight_templates: list[dict[str, Any]],
+    profile_templates: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     normalized_seed = _apply_safe_defaults(seed_params)
-    weight_variants = _build_weight_variants(normalized_seed)
-    threshold_variants = _build_threshold_variants(normalized_seed)
-    profile_variants = _build_profile_variants(normalized_seed)
+    weight_variants = _build_weight_variants(
+        normalized_seed,
+        weight_templates=weight_templates,
+    )
+    threshold_variants = _build_threshold_variants(
+        normalized_seed,
+        threshold_field_specs=threshold_field_specs,
+        int_field_specs=int_field_specs,
+    )
+    profile_variants = _build_profile_variants(
+        normalized_seed,
+        profile_templates=profile_templates,
+    )
 
     candidates: list[dict[str, Any]] = []
     candidates.append(normalized_seed)
@@ -897,21 +1012,38 @@ def _interleave_candidate_groups(groups: list[list[dict[str, Any]]]) -> list[dic
 def generate_param_candidates(
     *,
     base_params: dict[str, Any],
+    search_space: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
     """
-    功能：根據 base strategy 產生第八版候選參數組合。
+    功能：根據 base strategy 產生候選參數組合。
     說明：
-        - 新增真正獨立的 base search seeds
-        - 不再只圍繞 ACTIVE 附近微調
-        - 每個 seed 內再做 threshold / profile / weights / combo 搜尋
-        - 改為 seed 交錯輸出，避免 seed_base_current 壟斷前段配額
-        - 最後做全域 fingerprint 去重
+        - 支援由 search_space_config 注入搜尋空間
+        - 若未提供 search_space，則使用內建 defaults
+        - 改為 seed 交錯輸出，避免前段配額被單一 seed 吃掉
     """
-    seed_params_list = _build_seed_params(base_params)
+    (
+        threshold_field_specs,
+        int_field_specs,
+        weight_templates,
+        profile_templates,
+        base_search_seeds,
+    ) = _build_search_space_overrides(search_space)
+
+    seed_params_list = _build_seed_params(
+        base_params,
+        base_search_seeds=base_search_seeds,
+        weight_templates=weight_templates,
+    )
 
     per_seed_candidates: list[list[dict[str, Any]]] = []
     for seed_params in seed_params_list:
-        seed_candidates = _generate_candidates_from_seed(seed_params)
+        seed_candidates = _generate_candidates_from_seed(
+            seed_params,
+            threshold_field_specs=threshold_field_specs,
+            int_field_specs=int_field_specs,
+            weight_templates=weight_templates,
+            profile_templates=profile_templates,
+        )
         per_seed_candidates.append(seed_candidates)
 
     interleaved_candidates = _interleave_candidate_groups(per_seed_candidates)

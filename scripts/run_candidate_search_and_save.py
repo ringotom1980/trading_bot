@@ -24,6 +24,7 @@ from evolver.generator import generate_param_candidates
 from evolver.scorer import calculate_candidate_score, evaluate_candidate_gate
 from storage.db import get_connection, connection_scope
 from storage.repositories.historical_klines_repo import get_historical_klines_by_range
+from storage.repositories.search_space_config_repo import get_active_search_space_config
 from storage.repositories.strategy_candidates_repo import (
     delete_strategy_candidates_for_range,
     get_top_strategy_candidates,
@@ -244,12 +245,21 @@ def main() -> None:
             start_time=start_time,
             end_time=end_time,
         )
+        scope_key = f"{symbol}:{interval}"
+        active_search_space = get_active_search_space_config(
+            conn,
+            scope_key=scope_key,
+        )
 
     if len(klines) < 61:
         raise RuntimeError(f"歷史 K 線不足，got={len(klines)}")
 
     base_params = dict(strategy["params_json"] or {})
-    all_candidates = generate_param_candidates(base_params=base_params)
+    search_space = active_search_space["config_json"] if active_search_space else None
+    all_candidates = generate_param_candidates(
+        base_params=base_params,
+        search_space=search_space,
+    )
     candidates = all_candidates[: args.max_candidates]
 
     print("candidate search and save 開始")
@@ -261,6 +271,8 @@ def main() -> None:
     print(f"kline_count={len(klines)}")
     print(f"all_candidate_count={len(all_candidates)}")
     print(f"run_candidate_count={len(candidates)}")
+    print(f"scope_key={scope_key}")
+    print(f"active_search_space_config_id={active_search_space['config_id'] if active_search_space else None}")
     print("")
 
     started_at = time.time()
@@ -384,6 +396,7 @@ def main() -> None:
                 "saved_count": saved_count,
                 "top_candidate_id": int(top_rows[0]["candidate_id"]) if top_rows else None,
                 "top_rank_score": float(top_rows[0]["rank_score"]) if top_rows else None,
+                "search_space_config_id": active_search_space["config_id"] if active_search_space else None,
             },
             created_by="run_candidate_search_and_save",
             engine_mode_before="BACKTEST",
