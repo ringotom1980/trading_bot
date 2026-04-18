@@ -931,6 +931,13 @@ def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]
     return deduped
 
 
+def _is_focus_seed(seed_tag: str | None) -> bool:
+    return str(seed_tag or "") in {
+        "seed_base_current",
+        "seed_conservative",
+    }
+
+
 def _generate_candidates_from_seed(
     seed_params: dict[str, Any],
     *,
@@ -940,6 +947,8 @@ def _generate_candidates_from_seed(
     profile_templates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     normalized_seed = _apply_safe_defaults(seed_params)
+    seed_tag = str(normalized_seed.get("seed_tag") or "")
+    is_focus_seed = _is_focus_seed(seed_tag)
 
     local_corridor_variants = _build_local_corridor_variants(normalized_seed)
     weight_variants = _build_weight_variants(
@@ -959,14 +968,6 @@ def _generate_candidates_from_seed(
     candidates: list[dict[str, Any]] = []
     candidates.append(normalized_seed)
 
-    # 先放 local corridor，讓 max-candidates=20 時優先測附近小步變化
-    for params in local_corridor_variants:
-        if "weights" not in params:
-            params["weights"] = deepcopy(normalized_seed["weights"])
-        params["seed_tag"] = normalized_seed.get("seed_tag")
-        candidates.append(params)
-
-    # 再放少量權重變化
     selected_weight_variants = [
         p for p in weight_variants[1:]
         if str(p.get("mutation_tag")) in {
@@ -978,19 +979,6 @@ def _generate_candidates_from_seed(
         }
     ]
 
-    for params in selected_weight_variants:
-        params["seed_tag"] = normalized_seed.get("seed_tag")
-        candidates.append(params)
-
-    # 大步 threshold 只留很少量，避免又發散
-    selected_threshold_variants = threshold_variants[:8]
-    for params in selected_threshold_variants:
-        if "weights" not in params:
-            params["weights"] = deepcopy(normalized_seed["weights"])
-        params["seed_tag"] = normalized_seed.get("seed_tag")
-        candidates.append(params)
-
-    # profile 只保留 hold / risk，不再混 entry profile
     selected_profile_variants = [
         p for p in profile_variants
         if str(p.get("mutation_tag")) in {
@@ -1001,25 +989,60 @@ def _generate_candidates_from_seed(
             "fast_exit",
             "slow_exit",
         }
-    ][:4]
+    ]
 
-    for params in selected_profile_variants:
-        if "weights" not in params:
-            params["weights"] = deepcopy(normalized_seed["weights"])
-        params["seed_tag"] = normalized_seed.get("seed_tag")
-        candidates.append(params)
+    if is_focus_seed:
+        # 重點 seed：保留完整 local corridor
+        for params in local_corridor_variants:
+            if "weights" not in params:
+                params["weights"] = deepcopy(normalized_seed["weights"])
+            params["seed_tag"] = normalized_seed.get("seed_tag")
+            candidates.append(params)
 
-    # local corridor + 少量權重 combo
-    for local_params in local_corridor_variants[:10]:
-        for weight_params in selected_weight_variants[:3]:
-            merged = _copy_params(local_params)
-            merged["weights"] = deepcopy(weight_params["weights"])
-            merged["seed_tag"] = normalized_seed.get("seed_tag")
+        for params in selected_weight_variants[:5]:
+            params["seed_tag"] = normalized_seed.get("seed_tag")
+            candidates.append(params)
 
-            local_tag = local_params.get("mutation_tag", "local")
-            weight_tag = weight_params.get("mutation_tag", "weight")
-            merged["mutation_tag"] = f"{local_tag}+{weight_tag}"
-            candidates.append(merged)
+        for params in threshold_variants[:8]:
+            if "weights" not in params:
+                params["weights"] = deepcopy(normalized_seed["weights"])
+            params["seed_tag"] = normalized_seed.get("seed_tag")
+            candidates.append(params)
+
+        for params in selected_profile_variants[:4]:
+            if "weights" not in params:
+                params["weights"] = deepcopy(normalized_seed["weights"])
+            params["seed_tag"] = normalized_seed.get("seed_tag")
+            candidates.append(params)
+
+        for local_params in local_corridor_variants[:10]:
+            for weight_params in selected_weight_variants[:3]:
+                merged = _copy_params(local_params)
+                merged["weights"] = deepcopy(weight_params["weights"])
+                merged["seed_tag"] = normalized_seed.get("seed_tag")
+
+                local_tag = local_params.get("mutation_tag", "local")
+                weight_tag = weight_params.get("mutation_tag", "weight")
+                merged["mutation_tag"] = f"{local_tag}+{weight_tag}"
+                candidates.append(merged)
+
+    else:
+        # 非重點 seed：只留少量候選，避免配額被分散
+        for params in local_corridor_variants[:4]:
+            if "weights" not in params:
+                params["weights"] = deepcopy(normalized_seed["weights"])
+            params["seed_tag"] = normalized_seed.get("seed_tag")
+            candidates.append(params)
+
+        for params in selected_weight_variants[:2]:
+            params["seed_tag"] = normalized_seed.get("seed_tag")
+            candidates.append(params)
+
+        for params in threshold_variants[:2]:
+            if "weights" not in params:
+                params["weights"] = deepcopy(normalized_seed["weights"])
+            params["seed_tag"] = normalized_seed.get("seed_tag")
+            candidates.append(params)
 
     return candidates
 
@@ -1063,6 +1086,10 @@ def generate_param_candidates(
         base_params,
         base_search_seeds=base_search_seeds,
         weight_templates=weight_templates,
+    )
+
+    seed_params_list.sort(
+        key=lambda item: (0 if _is_focus_seed(item.get("seed_tag")) else 1, str(item.get("seed_tag") or "")),
     )
 
     per_seed_candidates: list[list[dict[str, Any]]] = []
