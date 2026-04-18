@@ -193,3 +193,84 @@ def get_system_event_count(conn: PgConnection) -> int:
         row = cursor.fetchone()
 
     return int(row[0]) if row is not None else 0
+
+
+def get_latest_candidate_search_failure_event(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+) -> dict[str, Any] | None:
+    """
+    功能：抓指定 symbol / interval 最新一筆 candidate search failure summary event。
+    規則：
+        - 只抓 run_candidate_search_and_save 寫入的 failure summary event
+        - 依 created_at / event_id 由新到舊排序
+    """
+    if not system_events_table_exists(conn):
+        return None
+
+    sql = """
+    SELECT
+        event_id,
+        event_type,
+        event_level,
+        source,
+        engine_mode_before,
+        engine_mode_after,
+        trade_mode_before,
+        trade_mode_after,
+        trading_state_before,
+        trading_state_after,
+        live_armed_before,
+        live_armed_after,
+        strategy_version_before,
+        strategy_version_after,
+        message,
+        details_json,
+        created_by,
+        created_at
+    FROM system_events
+    WHERE created_by = %s
+      AND message = %s
+      AND details_json->>'symbol' = %s
+      AND details_json->>'interval' = %s
+    ORDER BY created_at DESC, event_id DESC
+    LIMIT 1
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(
+            sql,
+            (
+                "run_candidate_search_and_save",
+                "candidate search and save 完成（無合格 candidate）",
+                symbol,
+                interval,
+            ),
+        )
+        row = cursor.fetchone()
+
+    if row is None:
+        return None
+
+    return {
+        "event_id": row[0],
+        "event_type": row[1],
+        "event_level": row[2],
+        "source": row[3],
+        "engine_mode_before": row[4],
+        "engine_mode_after": row[5],
+        "trade_mode_before": row[6],
+        "trade_mode_after": row[7],
+        "trading_state_before": row[8],
+        "trading_state_after": row[9],
+        "live_armed_before": row[10],
+        "live_armed_after": row[11],
+        "strategy_version_before": row[12],
+        "strategy_version_after": row[13],
+        "message": row[14],
+        "details_json": row[15],
+        "created_by": row[16],
+        "created_at": row[17],
+    }
