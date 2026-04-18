@@ -193,6 +193,55 @@ def _apply_family_diversity_cap(
     return selected
 
 
+def _summarize_reject_reasons(results: list[dict[str, object]]) -> dict[str, int]:
+    summary: dict[str, int] = {}
+
+    for row in results:
+        if bool(row.get("is_qualified")):
+            continue
+
+        reason = str(row.get("reject_reason") or "UNKNOWN")
+        summary[reason] = summary.get(reason, 0) + 1
+
+    return dict(sorted(summary.items(), key=lambda item: (-item[1], item[0])))
+
+
+def _build_closest_candidates_snapshot(
+    results: list[dict[str, object]],
+    *,
+    limit: int = 5,
+) -> list[dict[str, Any]]:
+    closest = sorted(
+        results,
+        key=lambda item: float(item["rank_score"]),
+        reverse=True,
+    )[:limit]
+
+    snapshots: list[dict[str, Any]] = []
+
+    for item in closest:
+        metrics = dict(item["metrics"])
+        params = dict(item["params"])
+
+        snapshots.append(
+            {
+                "candidate_no": int(item["candidate_no"]),
+                "rank_score": float(item["rank_score"]),
+                "reject_reason": item.get("reject_reason"),
+                "net_pnl": float(metrics.get("net_pnl", 0.0)),
+                "profit_factor": float(metrics.get("profit_factor", 0.0)),
+                "max_drawdown": float(metrics.get("max_drawdown", 0.0)),
+                "total_trades": int(metrics.get("total_trades", 0)),
+                "win_rate": float(metrics.get("win_rate", 0.0)),
+                "mutation_tag": params.get("mutation_tag"),
+                "seed_tag": params.get("seed_tag"),
+                "params": params,
+            }
+        )
+
+    return snapshots
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run candidate search and save v3")
     parser.add_argument("--symbol", type=str, default=None)
@@ -318,6 +367,9 @@ def main() -> None:
             )
 
     qualified_results = [row for row in raw_results if bool(row["is_qualified"])]
+    reject_reason_summary = _summarize_reject_reasons(raw_results)
+    closest_candidates_snapshot = _build_closest_candidates_snapshot(raw_results, limit=5)
+
     deduped_results = _dedupe_results_by_behavior(qualified_results)
     deduped_results.sort(key=lambda item: float(item["rank_score"]), reverse=True)
     diversified_results = _apply_family_diversity_cap(
@@ -326,15 +378,52 @@ def main() -> None:
     )
     diversified_results = _renumber_results(diversified_results)
 
-    if not diversified_results:
-        print("無合格 candidate（全部未通過 gate），本次不寫入 strategy_candidates")
-        return
     conn = get_connection()
     saved_count = 0
     deleted_count = 0
     top_rows: list[dict[str, object]] = []
 
     try:
+        if not diversified_results:
+            create_system_event(
+                conn,
+                event_type="MANUAL_ACTION",
+                event_level="WARN",
+                source="SYSTEM",
+                message="candidate search and save 完成（無合格 candidate）",
+                details={
+                    "source_strategy_version_id": int(strategy["strategy_version_id"]),
+                    "symbol": symbol,
+                    "interval": interval,
+                    "tested_range_start": start_time.isoformat(),
+                    "tested_range_end": end_time.isoformat(),
+                    "raw_candidate_count": len(raw_results),
+                    "qualified_candidate_count": len(qualified_results),
+                    "deduped_candidate_count": len(deduped_results),
+                    "diversified_candidate_count": len(diversified_results),
+                    "per_family_limit": args.per_family_limit,
+                    "deleted_count": 0,
+                    "saved_count": 0,
+                    "search_space_config_id": active_search_space["config_id"] if active_search_space else None,
+                    "reject_reason_summary": reject_reason_summary,
+                    "closest_candidates": closest_candidates_snapshot,
+                },
+                created_by="run_candidate_search_and_save",
+                engine_mode_before="BACKTEST",
+                engine_mode_after="BACKTEST",
+                trade_mode_before=None,
+                trade_mode_after=None,
+                trading_state_before="OFF",
+                trading_state_after="OFF",
+                live_armed_before=False,
+                live_armed_after=False,
+                strategy_version_before=int(strategy["strategy_version_id"]),
+                strategy_version_after=int(strategy["strategy_version_id"]),
+            )
+            conn.commit()
+
+            print("無合格 candidate（全部未通過 gate），已寫入 failure summary event")
+            return
         deleted_count = delete_strategy_candidates_for_range(
             conn,
             source_strategy_version_id=int(strategy["strategy_version_id"]),
