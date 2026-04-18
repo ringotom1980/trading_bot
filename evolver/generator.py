@@ -102,6 +102,23 @@ INT_FIELD_SPECS: dict[str, list[int]] = {
     "max_bars_hold": [-24, -18, -12, 12, 18, 24, 36],
 }
 
+LOCAL_THRESHOLD_FIELD_SPECS: dict[str, tuple[list[float], int]] = {
+    "entry_threshold": ([-0.02, -0.01, 0.01, 0.02], 4),
+    "entry_min_gap": ([-0.010, -0.005, 0.005, 0.010], 4),
+    "entry_confirm_score": ([-0.02, -0.01, 0.01, 0.02], 4),
+    "exit_threshold": ([-0.02, -0.01, 0.01, 0.02], 4),
+    "reverse_threshold": ([-0.02, -0.01, 0.01, 0.02], 4),
+    "reverse_gap": ([-0.01, -0.005, 0.005, 0.01], 4),
+    "hard_stop_loss_pct": ([-0.002, -0.001, 0.001, 0.002], 4),
+    "take_profit_pct": ([-0.005, -0.002, 0.002, 0.005], 4),
+}
+
+LOCAL_INT_FIELD_SPECS: dict[str, list[int]] = {
+    "cooldown_bars": [-1, 1],
+    "min_hold_bars": [-1, 1],
+    "max_bars_hold": [-4, 4],
+}
+
 WEIGHT_MUTATION_TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "trend_up",
@@ -815,6 +832,25 @@ def _build_threshold_variants(
     return variants
 
 
+def _build_local_corridor_variants(
+    base_params: dict[str, Any],
+) -> list[dict[str, Any]]:
+    base_params = _apply_safe_defaults(base_params)
+    variants: list[dict[str, Any]] = []
+
+    threshold_variants = _build_threshold_variants(
+        base_params,
+        threshold_field_specs=LOCAL_THRESHOLD_FIELD_SPECS,
+        int_field_specs=LOCAL_INT_FIELD_SPECS,
+    )
+
+    for params in threshold_variants:
+        params["mutation_tag"] = f"local::{params.get('mutation_tag')}"
+        variants.append(params)
+
+    return variants
+
+
 def _build_profile_variants(
     base_params: dict[str, Any],
     *,
@@ -904,6 +940,8 @@ def _generate_candidates_from_seed(
     profile_templates: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
     normalized_seed = _apply_safe_defaults(seed_params)
+
+    local_corridor_variants = _build_local_corridor_variants(normalized_seed)
     weight_variants = _build_weight_variants(
         normalized_seed,
         weight_templates=weight_templates,
@@ -921,74 +959,66 @@ def _generate_candidates_from_seed(
     candidates: list[dict[str, Any]] = []
     candidates.append(normalized_seed)
 
-    for params in weight_variants[1:]:
-        params["seed_tag"] = normalized_seed.get("seed_tag")
-        candidates.append(params)
-
-    for params in threshold_variants:
+    # 先放 local corridor，讓 max-candidates=20 時優先測附近小步變化
+    for params in local_corridor_variants:
         if "weights" not in params:
             params["weights"] = deepcopy(normalized_seed["weights"])
         params["seed_tag"] = normalized_seed.get("seed_tag")
         candidates.append(params)
 
-    for params in profile_variants:
-        if "weights" not in params:
-            params["weights"] = deepcopy(normalized_seed["weights"])
-        params["seed_tag"] = normalized_seed.get("seed_tag")
-        candidates.append(params)
-
-    selected_threshold_variants = threshold_variants[:20]
+    # 再放少量權重變化
     selected_weight_variants = [
         p for p in weight_variants[1:]
         if str(p.get("mutation_tag")) in {
             "trend_up",
             "momentum_up",
-            "volume_up",
-            "volume_momentum_combo",
             "trend_only",
-            "momentum_only",
+            "volume_momentum_combo",
             "long_trend_short_momentum",
-            "long_momentum_short_trend",
         }
     ]
-    selected_profile_variants = profile_variants[:8]
 
-    for threshold_params in selected_threshold_variants:
-        for weight_params in selected_weight_variants:
-            merged = _copy_params(threshold_params)
+    for params in selected_weight_variants:
+        params["seed_tag"] = normalized_seed.get("seed_tag")
+        candidates.append(params)
+
+    # 大步 threshold 只留很少量，避免又發散
+    selected_threshold_variants = threshold_variants[:8]
+    for params in selected_threshold_variants:
+        if "weights" not in params:
+            params["weights"] = deepcopy(normalized_seed["weights"])
+        params["seed_tag"] = normalized_seed.get("seed_tag")
+        candidates.append(params)
+
+    # profile 只保留 hold / risk，不再混 entry profile
+    selected_profile_variants = [
+        p for p in profile_variants
+        if str(p.get("mutation_tag")) in {
+            "hold_medium",
+            "hold_long",
+            "risk_tight",
+            "risk_balanced",
+            "fast_exit",
+            "slow_exit",
+        }
+    ][:4]
+
+    for params in selected_profile_variants:
+        if "weights" not in params:
+            params["weights"] = deepcopy(normalized_seed["weights"])
+        params["seed_tag"] = normalized_seed.get("seed_tag")
+        candidates.append(params)
+
+    # local corridor + 少量權重 combo
+    for local_params in local_corridor_variants[:10]:
+        for weight_params in selected_weight_variants[:3]:
+            merged = _copy_params(local_params)
             merged["weights"] = deepcopy(weight_params["weights"])
             merged["seed_tag"] = normalized_seed.get("seed_tag")
 
-            threshold_tag = threshold_params.get("mutation_tag", "threshold")
+            local_tag = local_params.get("mutation_tag", "local")
             weight_tag = weight_params.get("mutation_tag", "weight")
-            merged["mutation_tag"] = f"{threshold_tag}+{weight_tag}"
-            candidates.append(merged)
-
-    for profile_params in selected_profile_variants:
-        for weight_params in selected_weight_variants:
-            merged = _copy_params(profile_params)
-            merged["weights"] = deepcopy(weight_params["weights"])
-            merged["seed_tag"] = normalized_seed.get("seed_tag")
-
-            profile_tag = profile_params.get("mutation_tag", "profile")
-            weight_tag = weight_params.get("mutation_tag", "weight")
-            merged["mutation_tag"] = f"{profile_tag}+{weight_tag}"
-            candidates.append(merged)
-
-    for profile_params in selected_profile_variants[:4]:
-        for threshold_params in selected_threshold_variants[:6]:
-            merged = _copy_params(profile_params)
-            for key, value in threshold_params.items():
-                if key in {"weights", "mutation_tag", "seed_tag"}:
-                    continue
-                merged[key] = value
-
-            merged["weights"] = deepcopy(normalized_seed["weights"])
-            merged["seed_tag"] = normalized_seed.get("seed_tag")
-
-            profile_tag = profile_params.get("mutation_tag", "profile")
-            threshold_tag = threshold_params.get("mutation_tag", "threshold")
-            merged["mutation_tag"] = f"{profile_tag}+{threshold_tag}"
+            merged["mutation_tag"] = f"{local_tag}+{weight_tag}"
             candidates.append(merged)
 
     return candidates
