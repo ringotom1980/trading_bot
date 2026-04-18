@@ -61,13 +61,13 @@ def _build_search_space_actions(
     search_space_actions: list[dict[str, Any]] = []
 
     summary = dict(analysis.get("search_space_summary") or {})
-    status = str(summary.get("status") or "")
     candidate_count = int(summary.get("candidate_count", 0))
     negative_count = int(summary.get("negative_net_pnl_count", 0))
     reject_reason_summary = dict(summary.get("reject_reason_summary") or {})
+    closest_candidates = list(summary.get("closest_candidates") or [])
 
     if candidate_count <= 0:
-        search_space_actions.append(
+        return [
             {
                 "action": "KEEP",
                 "reason": {
@@ -76,57 +76,63 @@ def _build_search_space_actions(
                     "summary": summary,
                 },
             }
-        )
-        return search_space_actions
+        ]
 
     negative_ratio = negative_count / candidate_count
     low_trade_count = int(reject_reason_summary.get("TOTAL_TRADES_TOO_LOW", 0))
     low_trade_ratio = low_trade_count / candidate_count
 
-    if status == "ALL_FAILED_NET_PNL_NOT_POSITIVE":
-        search_space_actions.append(
-            {
-                "action": "TIGHTEN",
-                "reason": {
-                    "type": "ALL_FAILED_NET_PNL_NOT_POSITIVE",
-                    "message": "最近候選全數 net_pnl <= 0，下一輪往更保守、更少交易方向收斂",
-                    "summary": summary,
-                },
-            }
-        )
-        return search_space_actions
+    best_negative_seed_names: list[str] = []
+    best_low_trade_seed_names: list[str] = []
 
-    if negative_ratio >= 0.80 and low_trade_ratio <= 0.25:
+    for item in closest_candidates:
+        seed_tag = str(item.get("seed_tag") or "")
+        reject_reason = str(item.get("reject_reason") or "")
+        if not seed_tag:
+            continue
+
+        if reject_reason == "NET_PNL_NOT_POSITIVE" and seed_tag not in best_negative_seed_names:
+            best_negative_seed_names.append(seed_tag)
+
+        if reject_reason == "TOTAL_TRADES_TOO_LOW" and seed_tag not in best_low_trade_seed_names:
+            best_low_trade_seed_names.append(seed_tag)
+
+    if negative_ratio >= 0.60 and best_negative_seed_names:
         search_space_actions.append(
             {
                 "action": "TIGHTEN_SOFT",
+                "target_seed_names": best_negative_seed_names[:2],
                 "reason": {
-                    "type": "MOSTLY_NEGATIVE_NET_PNL",
-                    "message": "大多數候選仍為負報酬，且交易過少比例不高，先做溫和收緊",
+                    "type": "FOCUS_NEGATIVE_SEEDS",
+                    "message": "針對仍為負報酬的主力 seed 做溫和收緊",
                     "summary": summary,
                     "negative_ratio": negative_ratio,
                     "low_trade_ratio": low_trade_ratio,
+                    "target_seed_names": best_negative_seed_names[:2],
                 },
             }
         )
-        return search_space_actions
 
-    if low_trade_ratio >= 0.40:
+    if low_trade_ratio >= 0.20 and best_low_trade_seed_names:
         search_space_actions.append(
             {
-                "action": "LOOSEN",
+                "action": "LOOSEN_SOFT",
+                "target_seed_names": best_low_trade_seed_names[:2],
                 "reason": {
-                    "type": "TOO_MANY_LOW_TRADE_CANDIDATES",
-                    "message": "交易過少比例偏高，下一輪略放鬆 entry 條件",
+                    "type": "FOCUS_LOW_TRADE_SEEDS",
+                    "message": "針對交易過少的主力 seed 做溫和放鬆",
                     "summary": summary,
                     "negative_ratio": negative_ratio,
                     "low_trade_ratio": low_trade_ratio,
+                    "target_seed_names": best_low_trade_seed_names[:2],
                 },
             }
         )
+
+    if search_space_actions:
         return search_space_actions
 
-    search_space_actions.append(
+    return [
         {
             "action": "KEEP",
             "reason": {
@@ -137,8 +143,7 @@ def _build_search_space_actions(
                 "low_trade_ratio": low_trade_ratio,
             },
         }
-    )
-    return search_space_actions
+    ]
 
 
 def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str, Any]:

@@ -29,6 +29,10 @@ def _get_seed_overrides(seed: dict[str, Any]) -> dict[str, Any]:
     return seed["overrides"]
 
 
+def _get_seed_name(seed: dict[str, Any]) -> str:
+    return str(seed.get("name") or "")
+
+
 def _tighten_seed_overrides(seed: dict[str, Any]) -> None:
     overrides = _get_seed_overrides(seed)
 
@@ -95,6 +99,28 @@ def _loosen_seed_overrides(seed: dict[str, Any]) -> None:
         overrides["max_bars_hold"] = max(4, int(overrides["max_bars_hold"]) - 2)
 
 
+def _soft_loosen_seed_overrides(seed: dict[str, Any]) -> None:
+    overrides = _get_seed_overrides(seed)
+
+    if "entry_threshold" in overrides:
+        overrides["entry_threshold"] = max(0.30, round(float(overrides["entry_threshold"]) - 0.005, 6))
+
+    if "entry_min_gap" in overrides:
+        overrides["entry_min_gap"] = max(0.02, round(float(overrides["entry_min_gap"]) - 0.0025, 6))
+
+    if "entry_confirm_score" in overrides:
+        overrides["entry_confirm_score"] = max(0.30, round(float(overrides["entry_confirm_score"]) - 0.005, 6))
+
+    if "cooldown_bars" in overrides:
+        overrides["cooldown_bars"] = max(0, int(overrides["cooldown_bars"]) - 1)
+
+    if "min_hold_bars" in overrides:
+        overrides["min_hold_bars"] = max(1, int(overrides["min_hold_bars"]) - 1)
+
+    if "max_bars_hold" in overrides:
+        overrides["max_bars_hold"] = max(4, int(overrides["max_bars_hold"]) - 2)
+
+
 def _tighten_threshold_field_specs(threshold_specs: dict[str, Any]) -> None:
     for field in ("entry_threshold",):
         spec = threshold_specs.get(field)
@@ -127,10 +153,20 @@ def _apply_governor_policy(
 ) -> None:
     for action in search_space_actions or []:
         action_type = str(action.get("action") or "KEEP")
+        target_seed_names = {
+            str(name)
+            for name in (action.get("target_seed_names") or [])
+            if str(name).strip()
+        }
 
         threshold_specs = next_config.get("threshold_field_specs")
         int_specs = next_config.get("int_field_specs")
         base_search_seeds = next_config.get("base_search_seeds")
+
+        def should_apply_to_seed(seed: dict[str, Any]) -> bool:
+            if not target_seed_names:
+                return True
+            return _get_seed_name(seed) in target_seed_names
 
         if action_type == "TIGHTEN":
             if isinstance(threshold_specs, dict):
@@ -139,20 +175,26 @@ def _apply_governor_policy(
                 _tighten_int_field_specs(int_specs)
             if isinstance(base_search_seeds, list):
                 for seed in base_search_seeds:
-                    if isinstance(seed, dict):
+                    if isinstance(seed, dict) and should_apply_to_seed(seed):
                         _tighten_seed_overrides(seed)
 
         elif action_type == "TIGHTEN_SOFT":
             if isinstance(base_search_seeds, list):
                 for seed in base_search_seeds:
-                    if isinstance(seed, dict):
+                    if isinstance(seed, dict) and should_apply_to_seed(seed):
                         _soft_tighten_seed_overrides(seed)
 
         elif action_type == "LOOSEN":
             if isinstance(base_search_seeds, list):
                 for seed in base_search_seeds:
-                    if isinstance(seed, dict):
+                    if isinstance(seed, dict) and should_apply_to_seed(seed):
                         _loosen_seed_overrides(seed)
+
+        elif action_type == "LOOSEN_SOFT":
+            if isinstance(base_search_seeds, list):
+                for seed in base_search_seeds:
+                    if isinstance(seed, dict) and should_apply_to_seed(seed):
+                        _soft_loosen_seed_overrides(seed)
 
 
 def build_next_search_space(
