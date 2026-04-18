@@ -58,8 +58,6 @@ def _build_search_space_actions(
     *,
     analysis: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    search_space_actions: list[dict[str, Any]] = []
-
     summary = dict(analysis.get("search_space_summary") or {})
     candidate_count = int(summary.get("candidate_count", 0))
     negative_count = int(summary.get("negative_net_pnl_count", 0))
@@ -82,8 +80,8 @@ def _build_search_space_actions(
     low_trade_count = int(reject_reason_summary.get("TOTAL_TRADES_TOO_LOW", 0))
     low_trade_ratio = low_trade_count / candidate_count
 
-    best_negative_seed_names: list[str] = []
-    best_low_trade_seed_names: list[str] = []
+    best_negative_seed_name: str | None = None
+    best_low_trade_seed_name: str | None = None
 
     for item in closest_candidates:
         seed_tag = str(item.get("seed_tag") or "")
@@ -91,46 +89,48 @@ def _build_search_space_actions(
         if not seed_tag:
             continue
 
-        if reject_reason == "NET_PNL_NOT_POSITIVE" and seed_tag not in best_negative_seed_names:
-            best_negative_seed_names.append(seed_tag)
+        if best_negative_seed_name is None and reject_reason == "NET_PNL_NOT_POSITIVE":
+            best_negative_seed_name = seed_tag
 
-        if reject_reason == "TOTAL_TRADES_TOO_LOW" and seed_tag not in best_low_trade_seed_names:
-            best_low_trade_seed_names.append(seed_tag)
+        if best_low_trade_seed_name is None and reject_reason == "TOTAL_TRADES_TOO_LOW":
+            best_low_trade_seed_name = seed_tag
 
-    if negative_ratio >= 0.60 and best_negative_seed_names:
-        search_space_actions.append(
-            {
-                "action": "TIGHTEN_SOFT",
-                "target_seed_names": best_negative_seed_names[:2],
-                "reason": {
-                    "type": "FOCUS_NEGATIVE_SEEDS",
-                    "message": "針對仍為負報酬的主力 seed 做溫和收緊",
-                    "summary": summary,
-                    "negative_ratio": negative_ratio,
-                    "low_trade_ratio": low_trade_ratio,
-                    "target_seed_names": best_negative_seed_names[:2],
-                },
-            }
-        )
+        if best_negative_seed_name and best_low_trade_seed_name:
+            break
 
-    if low_trade_ratio >= 0.20 and best_low_trade_seed_names:
-        search_space_actions.append(
+    # 規則 1：只要有低交易數主力 seed，就優先只救它
+    if low_trade_ratio >= 0.20 and best_low_trade_seed_name:
+        return [
             {
                 "action": "LOOSEN_SOFT",
-                "target_seed_names": best_low_trade_seed_names[:2],
+                "target_seed_names": [best_low_trade_seed_name],
                 "reason": {
-                    "type": "FOCUS_LOW_TRADE_SEEDS",
-                    "message": "針對交易過少的主力 seed 做溫和放鬆",
+                    "type": "FOCUS_SINGLE_LOW_TRADE_SEED",
+                    "message": "優先只放鬆交易過少的最佳 seed，其他 seed 先保持不動",
                     "summary": summary,
                     "negative_ratio": negative_ratio,
                     "low_trade_ratio": low_trade_ratio,
-                    "target_seed_names": best_low_trade_seed_names[:2],
+                    "target_seed_names": [best_low_trade_seed_name],
                 },
             }
-        )
+        ]
 
-    if search_space_actions:
-        return search_space_actions
+    # 規則 2：沒有低交易問題時，才去收緊負報酬主力 seed
+    if negative_ratio >= 0.60 and best_negative_seed_name:
+        return [
+            {
+                "action": "TIGHTEN_SOFT",
+                "target_seed_names": [best_negative_seed_name],
+                "reason": {
+                    "type": "FOCUS_SINGLE_NEGATIVE_SEED",
+                    "message": "僅針對最佳負報酬 seed 做溫和收緊",
+                    "summary": summary,
+                    "negative_ratio": negative_ratio,
+                    "low_trade_ratio": low_trade_ratio,
+                    "target_seed_names": [best_negative_seed_name],
+                },
+            }
+        ]
 
     return [
         {
