@@ -174,3 +174,37 @@ def get_top_family_performance_summaries(
         rows = cursor.fetchall()
 
     return [_row_to_family_performance_summary(row) for row in rows]
+
+
+def get_all_family_performance_summaries(
+    conn: PgConnection,
+    *,
+    symbol: str,
+    interval: str,
+) -> list[dict[str, Any]]:
+    sql = """
+    SELECT
+        summary_id,
+        family_key,
+        symbol,
+        interval,
+        sample_count,
+        pass_count,
+        fail_count,
+        avg_rank_score,
+        avg_net_pnl,
+        avg_profit_factor,
+        avg_max_drawdown,
+        last_run_at,
+        updated_at
+    FROM family_performance_summary
+    WHERE symbol = %s
+      AND interval = %s
+    ORDER BY avg_rank_score DESC, sample_count DESC, summary_id ASC
+    """
+
+    with conn.cursor() as cursor:
+        cursor.execute(sql, (symbol, interval))
+        rows = cursor.fetchall()
+
+    return [_row_to_family_performance_summary(row) for row in rows]
