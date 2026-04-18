@@ -27,13 +27,21 @@ def _build_scope_key(*, symbol: str, interval: str) -> str:
 
 def _build_default_search_space() -> dict[str, Any]:
     return {
-        "entry_threshold": {"min": 0.5, "max": 0.7},
-        "exit_threshold": {"min": 0.3, "max": 0.5},
-        "reverse_threshold": {"min": 0.65, "max": 0.8},
-        "families": {
-            "trend_following_v1": 0.5,
-            "mean_reversion_v1": 0.5,
+        "threshold_field_specs": {
+            "entry_threshold": [[-0.18, -0.12, -0.08, -0.05, 0.03, 0.05, 0.08, 0.12], 4],
+            "exit_threshold": [[-0.12, -0.08, -0.05, 0.05, 0.08, 0.12], 4],
+            "reverse_threshold": [[-0.12, -0.08, -0.05, 0.05, 0.08, 0.12], 4],
+            "reverse_gap": [[-0.05, -0.03, -0.02, 0.02, 0.03, 0.05], 4],
+            "hard_stop_loss_pct": [[-0.010, -0.008, -0.005, 0.005, 0.008, 0.012], 4],
+            "take_profit_pct": [[-0.020, -0.015, -0.010, 0.010, 0.015, 0.020], 4],
         },
+        "int_field_specs": {
+            "cooldown_bars": [-2, -1, 1, 2, 4],
+            "min_hold_bars": [-2, -1, 1, 2, 4, 6],
+            "max_bars_hold": [-24, -18, -12, 12, 18, 24, 36],
+        },
+        "base_search_seeds": [],
+        "families": {},
         "feature_bias": {},
     }
 
@@ -44,6 +52,41 @@ def _has_any_meaningful_change(
     next_config: dict[str, Any],
 ) -> bool:
     return current_config != next_config
+
+
+def _build_search_space_actions(
+    *,
+    analysis: dict[str, Any],
+) -> list[dict[str, Any]]:
+    search_space_actions: list[dict[str, Any]] = []
+
+    summary = dict(analysis.get("search_space_summary") or {})
+    status = str(summary.get("status") or "")
+
+    if status == "ALL_FAILED_NET_PNL_NOT_POSITIVE":
+        search_space_actions.append(
+            {
+                "action": "TIGHTEN",
+                "reason": {
+                    "type": "ALL_FAILED_NET_PNL_NOT_POSITIVE",
+                    "message": "最近候選全數 net_pnl <= 0，下一輪往更保守、更少交易方向收斂",
+                    "summary": summary,
+                },
+            }
+        )
+    else:
+        search_space_actions.append(
+            {
+                "action": "KEEP",
+                "reason": {
+                    "type": "NO_SEARCH_SPACE_CHANGE",
+                    "message": "目前沒有觸發 search space 收斂條件",
+                    "summary": summary,
+                },
+            }
+        )
+
+    return search_space_actions
 
 
 def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str, Any]:
@@ -98,11 +141,13 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
         )
         family_actions = build_family_actions(analysis["families"])
         feature_actions = build_feature_actions(analysis["features"])
+        search_space_actions = _build_search_space_actions(analysis=analysis)
 
         next_config = build_next_search_space(
             current_config,
             family_actions=family_actions,
             feature_actions=feature_actions,
+            search_space_actions=search_space_actions,
         )
 
         if _has_any_meaningful_change(
@@ -113,7 +158,7 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                 conn,
                 scope_key=scope_key,
                 config=next_config,
-                created_by="governor_family_feature_adjust",
+                created_by="governor_family_feature_searchspace_adjust",
             )
 
             decision_id = create_governor_decision(
@@ -126,10 +171,11 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                 before_value=current_config,
                 after_value=next_config,
                 reason={
-                    "type": "FAMILY_AND_FEATURE_ACTIONS_APPLIED",
-                    "message": "依 family summary 與 feature diagnostics 調整 search space",
+                    "type": "FAMILY_FEATURE_SEARCHSPACE_ACTIONS_APPLIED",
+                    "message": "依 family / feature / search space summary 調整 search space",
                     "family_actions": family_actions,
                     "feature_actions": feature_actions,
+                    "search_space_actions": search_space_actions,
                 },
             )
 
@@ -141,6 +187,7 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                     "config_id": config_id,
                     "family_actions": family_actions,
                     "feature_actions": feature_actions,
+                    "search_space_actions": search_space_actions,
                 }
             )
         else:
@@ -155,9 +202,10 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                 after_value=current_config,
                 reason={
                     "type": "NO_CHANGE",
-                    "message": "family / feature actions 未造成 search space 變化，維持現況",
+                    "message": "family / feature / search space actions 未造成 search space 變化，維持現況",
                     "family_actions": family_actions,
                     "feature_actions": feature_actions,
+                    "search_space_actions": search_space_actions,
                 },
             )
 
@@ -169,6 +217,7 @@ def run_governor_cycle(*, run_key: str, symbol: str, interval: str) -> dict[str,
                     "config_id": active_config_id,
                     "family_actions": family_actions,
                     "feature_actions": feature_actions,
+                    "search_space_actions": search_space_actions,
                 }
             )
 

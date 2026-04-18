@@ -16,6 +16,8 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 from governor.governor import run_governor_cycle
+from storage.db import connection_scope
+from storage.repositories.search_space_config_repo import get_active_search_space_config
 
 
 def main() -> None:
@@ -38,7 +40,17 @@ def main() -> None:
         interval=args.interval,
     )
 
-    print(json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True))
+    scope_key = f"{args.symbol}:{args.interval}"
+    with connection_scope() as conn:
+        active_row = get_active_search_space_config(conn, scope_key=scope_key)
+
+    payload = {
+        "governor_result": result,
+        "active_search_space_config_id": active_row["config_id"] if active_row else None,
+        "active_search_space_config_version": active_row["config_version"] if active_row else None,
+    }
+
+    print(json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True))
 
 
 if __name__ == "__main__":
