@@ -9,34 +9,36 @@ from typing import Any
 
 
 DEFAULT_PROMOTION_GATE = {
-    "min_net_pnl": 0.0,
-    "min_profit_factor": 1.05,
-    "max_drawdown": 90.0,
-    "min_total_trades": 20,
-    "min_rank_score": 0.0,
-    "min_net_pnl_improvement": 5.0,
-    "min_profit_factor_improvement": 0.02,
-    "max_drawdown_relaxation": 5.0,
+    "min_net_pnl": 10.0,
+    "min_profit_factor": 1.20,
+    "max_drawdown": 60.0,
+    "min_total_trades": 40,
+    "max_total_trades": 800,
+    "min_rank_score": 20.0,
+    "min_net_pnl_improvement": 10.0,
+    "min_profit_factor_improvement": 0.10,
+    "max_drawdown_relaxation": 0.0,
 }
 
 
 DEFAULT_WALK_FORWARD_WINDOW_GATE = {
-    "min_total_trades": 8,
-    "min_profit_factor": 0.90,
-    "max_drawdown_relaxation": 8.0,
+    "min_total_trades": 4,
+    "min_profit_factor": 1.05,
+    "min_net_pnl": 0.0,
+    "max_drawdown_relaxation": 3.0,
 }
 
 
 DEFAULT_WALK_FORWARD_GATE = {
-    "min_pass_windows": 1,
-    "min_beat_active_windows": 1,
-    "min_pass_ratio": 0.50,
-    "min_avg_net_pnl": 0.0,
-    "min_avg_profit_factor": 1.05,
-    "max_avg_drawdown": 90.0,
-    "max_drawdown_relaxation_vs_active": 3.0,
-    "min_profit_factor_edge_vs_active": 0.05,
-    "min_net_pnl_edge_vs_active": 0.0,
+    "min_pass_windows": 2,
+    "min_beat_active_windows": 2,
+    "min_pass_ratio": 0.67,
+    "min_avg_net_pnl": 5.0,
+    "min_avg_profit_factor": 1.15,
+    "max_avg_drawdown": 35.0,
+    "max_drawdown_relaxation_vs_active": 0.0,
+    "min_profit_factor_edge_vs_active": 0.10,
+    "min_net_pnl_edge_vs_active": 3.0,
 }
 
 
@@ -105,6 +107,11 @@ def check_promotion_gate(
     if total_trades < int(gate_cfg["min_total_trades"]):
         reasons.append(
             f"total_trades 未達標：{total_trades} < {int(gate_cfg['min_total_trades'])}"
+        )
+
+    if total_trades > int(gate_cfg["max_total_trades"]):
+        reasons.append(
+            f"total_trades 過高：{total_trades} > {int(gate_cfg['max_total_trades'])}"
         )
 
     if candidate_rank_score is not None and candidate_rank_score < float(gate_cfg["min_rank_score"]):
@@ -300,11 +307,22 @@ def check_walk_forward_window_gate(
 
     min_total_trades = int(gate_cfg["min_total_trades"])
     min_profit_factor = float(gate_cfg["min_profit_factor"])
+    min_net_pnl = float(gate_cfg["min_net_pnl"])
     max_drawdown_relaxation = float(gate_cfg["max_drawdown_relaxation"])
 
     if candidate_total_trades < min_total_trades:
         reasons.append(
             f"window total_trades 未達標：{candidate_total_trades} < {min_total_trades}"
+        )
+
+    if candidate_net_pnl <= min_net_pnl:
+        reasons.append(
+            f"window net_pnl 未達標：{candidate_net_pnl:.8f} <= {min_net_pnl:.8f}"
+        )
+
+    if candidate_profit_factor < min_profit_factor:
+        reasons.append(
+            f"window profit_factor 未達最低門檻：{candidate_profit_factor:.8f} < {min_profit_factor:.8f}"
         )
 
     path_a_pass = (

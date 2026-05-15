@@ -19,20 +19,32 @@ def evaluate_candidate_gate(metrics: dict[str, Any]) -> tuple[bool, str | None]:
     total_trades = int(metrics.get("total_trades", 0))
     win_rate = float(metrics.get("win_rate", 0.0))
     max_drawdown = float(metrics.get("max_drawdown", 0.0))
+    avg_trade_pnl = float(metrics.get("avg_trade_pnl", 0.0))
+    gross_pnl = float(metrics.get("gross_pnl", 0.0))
+    fees = float(metrics.get("fees", 0.0))
 
-    if total_trades < 20:
+    if total_trades < 40:
         return False, "TOTAL_TRADES_TOO_LOW"
+
+    if total_trades > 800:
+        return False, "TOTAL_TRADES_TOO_HIGH"
 
     if net_pnl <= 0:
         return False, "NET_PNL_NOT_POSITIVE"
 
-    if profit_factor < 1.0:
+    if avg_trade_pnl <= 0:
+        return False, "AVG_TRADE_PNL_NOT_POSITIVE"
+
+    if profit_factor < 1.20:
         return False, "PROFIT_FACTOR_TOO_LOW"
 
     if win_rate < 0.25:
         return False, "WIN_RATE_TOO_LOW"
 
-    if max_drawdown > net_pnl * 2.5:
+    if fees > 0 and gross_pnl <= fees * 1.25:
+        return False, "FEE_DRAG_TOO_HIGH"
+
+    if max_drawdown > net_pnl * 1.50:
         return False, "DRAWDOWN_TOO_HIGH"
 
     return True, None
@@ -55,16 +67,16 @@ def calculate_candidate_score(metrics: dict[str, Any]) -> float:
     total_trades = int(metrics.get("total_trades", 0))
     win_rate = float(metrics.get("win_rate", 0.0))
 
-    trade_count_bonus = min(total_trades, 80) * 0.06
+    trade_count_bonus = min(total_trades, 120) * 0.04
 
     overtrade_penalty = 0.0
-    if total_trades > 120:
-        overtrade_penalty = (total_trades - 120) * 0.15
+    if total_trades > 400:
+        overtrade_penalty = (total_trades - 400) * 0.35
 
     score = (
-        net_pnl * 0.45
-        + profit_factor * 35.0
-        - max_drawdown * 0.30
+        net_pnl * 0.70
+        + profit_factor * 45.0
+        - max_drawdown * 0.55
         + win_rate * 18.0
         + trade_count_bonus
         - overtrade_penalty
