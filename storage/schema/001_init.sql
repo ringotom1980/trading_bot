@@ -62,7 +62,7 @@ CREATE TABLE IF NOT EXISTS system_state (
     CONSTRAINT chk_system_state_engine_mode
         CHECK (engine_mode IN ('BACKTEST', 'REALTIME')),
     CONSTRAINT chk_system_state_trade_mode
-        CHECK (trade_mode IS NULL OR trade_mode IN ('TESTNET', 'LIVE')),
+        CHECK (trade_mode IS NULL OR trade_mode IN ('SIMULATION', 'TESTNET', 'LIVE')),
     CONSTRAINT chk_system_state_trading_state
         CHECK (trading_state IN ('ON', 'ENTRY_FROZEN', 'OFF')),
     CONSTRAINT chk_system_state_position_side

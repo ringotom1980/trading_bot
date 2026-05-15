@@ -13,7 +13,7 @@ from urllib.parse import urlencode
 
 import requests
 
-from config.constants import TRADE_MODE_LIVE, TRADE_MODE_TESTNET
+from config.constants import TRADE_MODE_LIVE, TRADE_MODE_SIMULATION, TRADE_MODE_TESTNET
 from config.settings import Settings
 
 BINANCE_FUTURES_LIVE_BASE_URL = "https://fapi.binance.com"
@@ -58,7 +58,7 @@ class BinanceClient:
         if trade_mode == TRADE_MODE_TESTNET:
             return BINANCE_FUTURES_TESTNET_BASE_URL
 
-        if trade_mode == TRADE_MODE_LIVE:
+        if trade_mode in {TRADE_MODE_LIVE, TRADE_MODE_SIMULATION}:
             return BINANCE_FUTURES_LIVE_BASE_URL
 
         raise ValueError(f"不支援的 TRADE_MODE：{trade_mode}")

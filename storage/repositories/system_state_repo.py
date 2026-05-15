@@ -79,6 +79,10 @@ def create_initial_system_state(
     active_strategy_version_id: int,
     primary_symbol: str,
     primary_interval: str,
+    engine_mode: str = "REALTIME",
+    trade_mode: str | None = "SIMULATION",
+    trading_state: str = "OFF",
+    live_armed: bool = False,
 ) -> None:
     """
     功能：建立第一筆 system_state 初始資料。
@@ -104,10 +108,10 @@ def create_initial_system_state(
     )
     VALUES (
         1,
-        'REALTIME',
-        'TESTNET',
-        'OFF',
-        FALSE,
+        %s,
+        %s,
+        %s,
+        %s,
         %s,
         %s,
         %s,
@@ -121,6 +125,10 @@ def create_initial_system_state(
         cursor.execute(
             sql,
             (
+                engine_mode,
+                trade_mode,
+                trading_state,
+                live_armed,
                 active_strategy_version_id,
                 primary_symbol,
                 primary_interval,

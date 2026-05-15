@@ -148,6 +148,10 @@ def seed_initial_strategy() -> None:
                 active_strategy_version_id=strategy_version_id,
                 primary_symbol=settings.primary_symbol,
                 primary_interval=settings.primary_interval,
+                engine_mode=settings.engine_mode,
+                trade_mode=settings.trade_mode,
+                trading_state=settings.trading_state,
+                live_armed=settings.live_armed,
             )
             logger.info("已建立 system_state 初始資料：id=1")
         else:
