@@ -109,6 +109,59 @@ def _apply_side_entry_filter(
     return long_score, short_score
 
 
+def _passes_entry_filters(
+    *,
+    feature_pack: dict[str, Any],
+    filters: dict[str, Any] | None,
+) -> bool:
+    if not isinstance(filters, dict):
+        return True
+
+    for feature_name, bounds in filters.items():
+        if feature_name not in feature_pack or not isinstance(bounds, dict):
+            continue
+
+        value = feature_pack.get(feature_name)
+        if not isinstance(value, (int, float)):
+            continue
+
+        min_value = bounds.get("min")
+        max_value = bounds.get("max")
+
+        if min_value is not None and float(value) < float(min_value):
+            return False
+
+        if max_value is not None and float(value) > float(max_value):
+            return False
+
+    return True
+
+
+def _apply_entry_feature_filters(
+    *,
+    long_score: float,
+    short_score: float,
+    feature_pack: dict[str, Any],
+    params: dict[str, Any] | None,
+) -> tuple[float, float]:
+    if not params:
+        return long_score, short_score
+
+    if not _passes_entry_filters(
+        feature_pack=feature_pack,
+        filters=params.get("long_entry_filters"),
+    ):
+        long_score = 0.0
+
+    if not _passes_entry_filters(
+        feature_pack=feature_pack,
+        filters=params.get("short_entry_filters"),
+    ):
+        short_score = 0.0
+
+    return long_score, short_score
+
+
 def _clamp(value: float, min_value: float = 0.0, max_value: float = 1.0) -> float:
     return max(min_value, min(max_value, value))
 
@@ -384,6 +437,13 @@ def calculate_signal_scores(
     long_score, short_score = _apply_side_entry_filter(
         long_score=long_score,
         short_score=short_score,
+        params=params,
+    )
+
+    long_score, short_score = _apply_entry_feature_filters(
+        long_score=long_score,
+        short_score=short_score,
+        feature_pack=feature_pack,
         params=params,
     )
 
