@@ -39,6 +39,57 @@ DEFAULT_WEIGHTS = {
     },
 }
 
+SIGNAL_MODE_TREND_FOLLOWING = "TREND_FOLLOWING"
+SIGNAL_MODE_CONTRARIAN = "CONTRARIAN"
+
+
+def _resolve_signal_mode(params: dict[str, Any] | None) -> str:
+    if not params:
+        return SIGNAL_MODE_TREND_FOLLOWING
+
+    mode = str(params.get("signal_mode", SIGNAL_MODE_TREND_FOLLOWING)).upper()
+    if mode == SIGNAL_MODE_CONTRARIAN:
+        return SIGNAL_MODE_CONTRARIAN
+    return SIGNAL_MODE_TREND_FOLLOWING
+
+
+def _resolve_allowed_regimes(
+    params: dict[str, Any] | None,
+    key: str,
+) -> set[str] | None:
+    if not params:
+        return None
+
+    raw_value = params.get(key)
+    if raw_value is None:
+        return None
+
+    if not isinstance(raw_value, list):
+        return None
+
+    regimes = {str(item).upper() for item in raw_value if str(item).strip()}
+    return regimes or None
+
+
+def _apply_regime_entry_filter(
+    *,
+    long_score: float,
+    short_score: float,
+    feature_pack: dict[str, Any],
+    params: dict[str, Any] | None,
+) -> tuple[float, float]:
+    regime = str(feature_pack.get("regime") or "").upper()
+    long_regimes = _resolve_allowed_regimes(params, "long_allowed_regimes")
+    short_regimes = _resolve_allowed_regimes(params, "short_allowed_regimes")
+
+    if long_regimes is not None and regime not in long_regimes:
+        long_score = 0.0
+
+    if short_regimes is not None and regime not in short_regimes:
+        short_score = 0.0
+
+    return long_score, short_score
+
 
 def _clamp(value: float, min_value: float = 0.0, max_value: float = 1.0) -> float:
     return max(min_value, min(max_value, value))
@@ -296,10 +347,20 @@ def calculate_signal_scores(
         for key in weights["short"]
     )
 
+    if _resolve_signal_mode(params) == SIGNAL_MODE_CONTRARIAN:
+        long_score, short_score = short_score, long_score
+
     long_score, short_score = _apply_context_bias(
         long_score=long_score,
         short_score=short_score,
         feature_pack=feature_pack,
+    )
+
+    long_score, short_score = _apply_regime_entry_filter(
+        long_score=long_score,
+        short_score=short_score,
+        feature_pack=feature_pack,
+        params=params,
     )
 
     return {

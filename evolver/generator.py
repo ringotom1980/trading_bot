@@ -77,6 +77,15 @@ def _build_search_space_overrides(
         "base_search_seeds",
         BASE_SEARCH_SEEDS,
     )
+    experimental_search_seeds = _get_search_space_section(
+        search_space,
+        "experimental_search_seeds",
+        EXPERIMENTAL_SEARCH_SEEDS,
+    )
+    base_search_seeds = _merge_seed_lists(
+        base_search_seeds,
+        experimental_search_seeds,
+    )
 
     return (
         threshold_specs,
@@ -529,6 +538,86 @@ BASE_SEARCH_SEEDS: list[dict[str, Any]] = [
     },
 ]
 
+EXPERIMENTAL_SEARCH_SEEDS: list[dict[str, Any]] = [
+    {
+        "name": "seed_contrarian_trend_only",
+        "overrides": {
+            "signal_mode": "CONTRARIAN",
+            "long_allowed_regimes": ["TREND_DOWN"],
+            "short_allowed_regimes": ["TREND_UP"],
+            "entry_threshold": 0.74,
+            "entry_min_gap": 0.22,
+            "entry_confirm_score": 0.78,
+            "exit_threshold": 0.48,
+            "reverse_threshold": 0.82,
+            "reverse_gap": 0.16,
+            "hard_stop_loss_pct": 0.010,
+            "take_profit_pct": 0.020,
+            "cooldown_bars": 12,
+            "min_hold_bars": 2,
+            "max_bars_hold": 12,
+        },
+        "weight_template": "trend_only",
+    },
+    {
+        "name": "seed_trend_regime_only",
+        "overrides": {
+            "signal_mode": "TREND_FOLLOWING",
+            "long_allowed_regimes": ["TREND_UP"],
+            "short_allowed_regimes": ["TREND_DOWN"],
+            "entry_threshold": 0.76,
+            "entry_min_gap": 0.22,
+            "entry_confirm_score": 0.80,
+            "exit_threshold": 0.46,
+            "reverse_threshold": 0.84,
+            "reverse_gap": 0.16,
+            "hard_stop_loss_pct": 0.012,
+            "take_profit_pct": 0.030,
+            "cooldown_bars": 14,
+            "min_hold_bars": 3,
+            "max_bars_hold": 18,
+        },
+        "weight_template": "trend_up",
+    },
+    {
+        "name": "seed_low_frequency_momentum",
+        "overrides": {
+            "signal_mode": "TREND_FOLLOWING",
+            "long_allowed_regimes": ["TREND_UP"],
+            "short_allowed_regimes": ["TREND_DOWN"],
+            "entry_threshold": 0.80,
+            "entry_min_gap": 0.26,
+            "entry_confirm_score": 0.84,
+            "exit_threshold": 0.44,
+            "reverse_threshold": 0.86,
+            "reverse_gap": 0.18,
+            "hard_stop_loss_pct": 0.014,
+            "take_profit_pct": 0.035,
+            "cooldown_bars": 18,
+            "min_hold_bars": 4,
+            "max_bars_hold": 24,
+        },
+        "weight_template": "momentum_only",
+    },
+]
+
+
+def _merge_seed_lists(
+    base_seeds: list[dict[str, Any]],
+    extra_seeds: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    merged = [deepcopy(seed) for seed in base_seeds]
+    existing_names = {str(seed.get("name") or "") for seed in merged}
+
+    for seed in extra_seeds:
+        seed_name = str(seed.get("name") or "")
+        if not seed_name or seed_name in existing_names:
+            continue
+        merged.append(deepcopy(seed))
+        existing_names.add(seed_name)
+
+    return merged
+
 
 def _round_float(value: float, digits: int = 6) -> float:
     return round(float(value), digits)
@@ -649,6 +738,14 @@ def _canonicalize_params(params: dict[str, Any]) -> dict[str, Any]:
     for key in int_fields:
         if key in canonical:
             canonical[key] = int(canonical[key])
+
+    if "signal_mode" in canonical:
+        canonical["signal_mode"] = str(canonical["signal_mode"]).upper()
+
+    for key in ("long_allowed_regimes", "short_allowed_regimes"):
+        value = canonical.get(key)
+        if isinstance(value, list):
+            canonical[key] = sorted({str(item).upper() for item in value})
 
     weights = canonical.get("weights")
     if isinstance(weights, dict):
@@ -881,6 +978,7 @@ def _is_valid_candidate(params: dict[str, Any]) -> bool:
     max_bars_hold = int(params.get("max_bars_hold", 1))
     hard_stop_loss_pct = float(params.get("hard_stop_loss_pct", 0.0))
     take_profit_pct = float(params.get("take_profit_pct", 0.0))
+    signal_mode = str(params.get("signal_mode", "TREND_FOLLOWING")).upper()
 
     if exit_threshold >= entry_threshold:
         return False
@@ -898,6 +996,17 @@ def _is_valid_candidate(params: dict[str, Any]) -> bool:
         return False
     if take_profit_pct > 0 and take_profit_pct <= hard_stop_loss_pct:
         return False
+    if signal_mode not in {"TREND_FOLLOWING", "CONTRARIAN"}:
+        return False
+
+    for regime_key in ("long_allowed_regimes", "short_allowed_regimes"):
+        regimes = params.get(regime_key)
+        if regimes is None:
+            continue
+        if not isinstance(regimes, list):
+            return False
+        if not set(str(item).upper() for item in regimes).issubset({"TREND_UP", "TREND_DOWN", "RANGE"}):
+            return False
 
     weights = params.get("weights")
     if not isinstance(weights, dict):
