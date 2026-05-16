@@ -162,13 +162,13 @@ def _apply_entry_feature_filters(
         feature_pack=feature_pack,
         filters=params.get("long_entry_filters"),
     ):
-        long_score = 0.0
+        long_score = float(params.get("long_filter_fail_score", 0.0))
 
     if not _passes_entry_filters(
         feature_pack=feature_pack,
         filters=params.get("short_entry_filters"),
     ):
-        short_score = 0.0
+        short_score = float(params.get("short_filter_fail_score", 0.0))
 
     return long_score, short_score
 
