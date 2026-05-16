@@ -91,6 +91,24 @@ def _apply_regime_entry_filter(
     return long_score, short_score
 
 
+def _apply_side_entry_filter(
+    *,
+    long_score: float,
+    short_score: float,
+    params: dict[str, Any] | None,
+) -> tuple[float, float]:
+    if not params:
+        return long_score, short_score
+
+    if params.get("long_enabled") is False:
+        long_score = 0.0
+
+    if params.get("short_enabled") is False:
+        short_score = 0.0
+
+    return long_score, short_score
+
+
 def _clamp(value: float, min_value: float = 0.0, max_value: float = 1.0) -> float:
     return max(min_value, min(max_value, value))
 
@@ -360,6 +378,12 @@ def calculate_signal_scores(
         long_score=long_score,
         short_score=short_score,
         feature_pack=feature_pack,
+        params=params,
+    )
+
+    long_score, short_score = _apply_side_entry_filter(
+        long_score=long_score,
+        short_score=short_score,
         params=params,
     )
 

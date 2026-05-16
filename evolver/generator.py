@@ -540,6 +540,69 @@ BASE_SEARCH_SEEDS: list[dict[str, Any]] = [
 
 EXPERIMENTAL_SEARCH_SEEDS: list[dict[str, Any]] = [
     {
+        "name": "seed_long_only_trend_low_frequency",
+        "overrides": {
+            "signal_mode": "TREND_FOLLOWING",
+            "long_enabled": True,
+            "short_enabled": False,
+            "long_allowed_regimes": ["TREND_UP"],
+            "entry_threshold": 0.78,
+            "entry_min_gap": 0.18,
+            "entry_confirm_score": 0.82,
+            "exit_threshold": 0.42,
+            "reverse_threshold": 0.86,
+            "reverse_gap": 0.18,
+            "hard_stop_loss_pct": 0.018,
+            "take_profit_pct": 0.045,
+            "cooldown_bars": 18,
+            "min_hold_bars": 4,
+            "max_bars_hold": 36,
+        },
+        "weight_template": "momentum_only",
+    },
+    {
+        "name": "seed_long_only_breakout_hold",
+        "overrides": {
+            "signal_mode": "TREND_FOLLOWING",
+            "long_enabled": True,
+            "short_enabled": False,
+            "long_allowed_regimes": ["TREND_UP", "RANGE"],
+            "entry_threshold": 0.74,
+            "entry_min_gap": 0.16,
+            "entry_confirm_score": 0.78,
+            "exit_threshold": 0.38,
+            "reverse_threshold": 0.84,
+            "reverse_gap": 0.18,
+            "hard_stop_loss_pct": 0.020,
+            "take_profit_pct": 0.055,
+            "cooldown_bars": 24,
+            "min_hold_bars": 8,
+            "max_bars_hold": 72,
+        },
+        "weight_template": "volume_momentum_combo",
+    },
+    {
+        "name": "seed_short_only_downtrend_strict",
+        "overrides": {
+            "signal_mode": "TREND_FOLLOWING",
+            "long_enabled": False,
+            "short_enabled": True,
+            "short_allowed_regimes": ["TREND_DOWN"],
+            "entry_threshold": 0.82,
+            "entry_min_gap": 0.24,
+            "entry_confirm_score": 0.86,
+            "exit_threshold": 0.48,
+            "reverse_threshold": 0.90,
+            "reverse_gap": 0.20,
+            "hard_stop_loss_pct": 0.010,
+            "take_profit_pct": 0.025,
+            "cooldown_bars": 24,
+            "min_hold_bars": 3,
+            "max_bars_hold": 18,
+        },
+        "weight_template": "momentum_only",
+    },
+    {
         "name": "seed_contrarian_trend_only",
         "overrides": {
             "signal_mode": "CONTRARIAN",
@@ -741,6 +804,10 @@ def _canonicalize_params(params: dict[str, Any]) -> dict[str, Any]:
 
     if "signal_mode" in canonical:
         canonical["signal_mode"] = str(canonical["signal_mode"]).upper()
+
+    for key in ("long_enabled", "short_enabled"):
+        if key in canonical:
+            canonical[key] = bool(canonical[key])
 
     for key in ("long_allowed_regimes", "short_allowed_regimes"):
         value = canonical.get(key)
@@ -979,6 +1046,8 @@ def _is_valid_candidate(params: dict[str, Any]) -> bool:
     hard_stop_loss_pct = float(params.get("hard_stop_loss_pct", 0.0))
     take_profit_pct = float(params.get("take_profit_pct", 0.0))
     signal_mode = str(params.get("signal_mode", "TREND_FOLLOWING")).upper()
+    long_enabled = bool(params.get("long_enabled", True))
+    short_enabled = bool(params.get("short_enabled", True))
 
     if exit_threshold >= entry_threshold:
         return False
@@ -997,6 +1066,8 @@ def _is_valid_candidate(params: dict[str, Any]) -> bool:
     if take_profit_pct > 0 and take_profit_pct <= hard_stop_loss_pct:
         return False
     if signal_mode not in {"TREND_FOLLOWING", "CONTRARIAN"}:
+        return False
+    if not long_enabled and not short_enabled:
         return False
 
     for regime_key in ("long_allowed_regimes", "short_allowed_regimes"):
