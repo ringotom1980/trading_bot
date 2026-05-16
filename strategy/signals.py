@@ -41,6 +41,7 @@ DEFAULT_WEIGHTS = {
 
 SIGNAL_MODE_TREND_FOLLOWING = "TREND_FOLLOWING"
 SIGNAL_MODE_CONTRARIAN = "CONTRARIAN"
+SCORE_MODE_FILTER_ONLY = "FILTER_ONLY"
 
 
 def _resolve_signal_mode(params: dict[str, Any] | None) -> str:
@@ -69,6 +70,16 @@ def _resolve_allowed_regimes(
 
     regimes = {str(item).upper() for item in raw_value if str(item).strip()}
     return regimes or None
+
+
+def _resolve_score_mode(params: dict[str, Any] | None) -> str:
+    if not params:
+        return ""
+
+    mode = str(params.get("score_mode", "")).upper()
+    if mode == SCORE_MODE_FILTER_ONLY:
+        return SCORE_MODE_FILTER_ONLY
+    return ""
 
 
 def _apply_regime_entry_filter(
@@ -420,6 +431,10 @@ def calculate_signal_scores(
 
     if _resolve_signal_mode(params) == SIGNAL_MODE_CONTRARIAN:
         long_score, short_score = short_score, long_score
+
+    if _resolve_score_mode(params) == SCORE_MODE_FILTER_ONLY:
+        long_score = 1.0 if params and params.get("long_enabled") is not False else 0.0
+        short_score = 1.0 if params and params.get("short_enabled") is not False else 0.0
 
     long_score, short_score = _apply_context_bias(
         long_score=long_score,
