@@ -21,7 +21,10 @@ from backtest.metrics import calculate_backtest_metrics
 from backtest.replay_engine import run_backtest_replay
 from config.settings import load_settings
 from evolver.generator import generate_param_candidates
-from evolver.scorer import calculate_candidate_score, evaluate_candidate_gate
+from evolver.scorer import (
+    calculate_candidate_score_for_params,
+    evaluate_candidate_gate_for_params,
+)
 from storage.db import connection_scope
 from storage.repositories.historical_klines_repo import get_historical_klines_by_range
 from storage.repositories.search_space_config_repo import get_active_search_space_config
@@ -342,9 +345,12 @@ def main() -> None:
             trades=replay_result["trades"],
             equity_curve=replay_result["equity_curve"],
         )
-        is_qualified, reject_reason = evaluate_candidate_gate(metrics)
+        is_qualified, reject_reason = evaluate_candidate_gate_for_params(
+            metrics,
+            candidate_params,
+        )
 
-        score = calculate_candidate_score(metrics)
+        score = calculate_candidate_score_for_params(metrics, candidate_params)
 
         row = {
             "rank_score": score,

@@ -50,6 +50,49 @@ def evaluate_candidate_gate(metrics: dict[str, Any]) -> tuple[bool, str | None]:
     return True, None
 
 
+def evaluate_candidate_gate_for_params(
+    metrics: dict[str, Any],
+    params: dict[str, Any],
+) -> tuple[bool, str | None]:
+    mutation_tag = str(params.get("mutation_tag") or "")
+    seed_tag = str(params.get("seed_tag") or "")
+    is_macro_candidate = "macro" in mutation_tag or "macro" in seed_tag
+
+    if not is_macro_candidate:
+        return evaluate_candidate_gate(metrics)
+
+    net_pnl = float(metrics.get("net_pnl", 0.0))
+    profit_factor = float(metrics.get("profit_factor", 0.0))
+    total_trades = int(metrics.get("total_trades", 0))
+    max_drawdown = float(metrics.get("max_drawdown", 0.0))
+    avg_trade_pnl = float(metrics.get("avg_trade_pnl", 0.0))
+    gross_pnl = float(metrics.get("gross_pnl", 0.0))
+    fees = float(metrics.get("fees", 0.0))
+
+    if total_trades < 8:
+        return False, "TOTAL_TRADES_TOO_LOW"
+
+    if total_trades > 120:
+        return False, "TOTAL_TRADES_TOO_HIGH"
+
+    if net_pnl <= 0:
+        return False, "NET_PNL_NOT_POSITIVE"
+
+    if avg_trade_pnl <= 0:
+        return False, "AVG_TRADE_PNL_NOT_POSITIVE"
+
+    if profit_factor < 1.10:
+        return False, "PROFIT_FACTOR_TOO_LOW"
+
+    if fees > 0 and gross_pnl <= fees * 1.10:
+        return False, "FEE_DRAG_TOO_HIGH"
+
+    if max_drawdown > max(net_pnl * 3.0, 80.0):
+        return False, "DRAWDOWN_TOO_HIGH"
+
+    return True, None
+
+
 def calculate_candidate_score(metrics: dict[str, Any]) -> float:
     """
     功能：依回測結果計算 candidate score。
@@ -83,3 +126,28 @@ def calculate_candidate_score(metrics: dict[str, Any]) -> float:
     )
 
     return score
+
+
+def calculate_candidate_score_for_params(
+    metrics: dict[str, Any],
+    params: dict[str, Any],
+) -> float:
+    is_qualified, _ = evaluate_candidate_gate_for_params(metrics, params)
+    if not is_qualified:
+        return -999999.0
+
+    net_pnl = float(metrics.get("net_pnl", 0.0))
+    profit_factor = float(metrics.get("profit_factor", 0.0))
+    max_drawdown = float(metrics.get("max_drawdown", 0.0))
+    total_trades = int(metrics.get("total_trades", 0))
+    win_rate = float(metrics.get("win_rate", 0.0))
+
+    trade_count_bonus = min(total_trades, 80) * 0.03
+
+    return (
+        net_pnl * 0.75
+        + profit_factor * 45.0
+        - max_drawdown * 0.40
+        + win_rate * 18.0
+        + trade_count_bonus
+    )
