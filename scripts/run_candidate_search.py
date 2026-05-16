@@ -231,6 +231,9 @@ def _summarize_reject_reasons(results: list[dict[str, object]]) -> dict[str, int
 
 
 def main() -> None:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True)
+
     parser = argparse.ArgumentParser(description="Run candidate search v3")
     parser.add_argument("--symbol", type=str, default=None, help="例如 BTCUSDT")
     parser.add_argument("--interval", type=str, default=None, help="例如 15m")
@@ -241,6 +244,12 @@ def main() -> None:
     parser.add_argument("--max-candidates", type=int, default=100, help="最多跑幾組 candidate，預設 100")
     parser.add_argument("--progress-step", type=int, default=10, help="每幾組印一次進度，預設 10")
     parser.add_argument("--per-family-limit", type=int, default=2, help="同一 family 最多保留幾個 candidate，預設 2")
+    parser.add_argument(
+        "--seed-tag-contains",
+        type=str,
+        default=None,
+        help="只跑 seed_tag 包含指定文字的 candidates",
+    )
     args = parser.parse_args()
 
     if args.max_candidates <= 0:
@@ -293,6 +302,15 @@ def main() -> None:
         base_params=base_params,
         search_space=search_space,
     )
+
+    if args.seed_tag_contains:
+        needle = args.seed_tag_contains.lower()
+        all_candidates = [
+            candidate
+            for candidate in all_candidates
+            if needle in str(candidate.get("seed_tag") or "").lower()
+        ]
+
     candidates = all_candidates[: args.max_candidates]
 
     print("candidate search 開始")
