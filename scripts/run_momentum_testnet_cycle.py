@@ -132,6 +132,47 @@ def _atr_pct(klines: list[dict[str, Any]], window: int = 96) -> float:
     return 0.0 if close == 0 else sum(true_ranges) / len(true_ranges) / close
 
 
+def _recent_market_move(
+    *,
+    klines: list[dict[str, Any]],
+    bars: int,
+    qty: float = 0.01,
+    fee_rate: float = 0.0004,
+    slippage_rate: float = 0.0005,
+) -> dict[str, float]:
+    if len(klines) < bars + 1:
+        return {
+            "return_pct": 0.0,
+            "long_pnl": 0.0,
+            "short_pnl": 0.0,
+        }
+
+    entry_price = float(klines[-(bars + 1)]["close"])
+    exit_price = float(klines[-1]["close"])
+    if entry_price == 0:
+        return {
+            "return_pct": 0.0,
+            "long_pnl": 0.0,
+            "short_pnl": 0.0,
+        }
+
+    long_entry = entry_price * (1 + slippage_rate)
+    long_exit = exit_price * (1 - slippage_rate)
+    short_entry = entry_price * (1 - slippage_rate)
+    short_exit = exit_price * (1 + slippage_rate)
+
+    long_gross = (long_exit - long_entry) * qty
+    short_gross = (short_entry - short_exit) * qty
+    long_fees = (long_entry + long_exit) * qty * fee_rate
+    short_fees = (short_entry + short_exit) * qty * fee_rate
+
+    return {
+        "return_pct": (exit_price - entry_price) / entry_price,
+        "long_pnl": long_gross - long_fees,
+        "short_pnl": short_gross - short_fees,
+    }
+
+
 def _get_testnet_usdt_balance(client: BinanceClient) -> float:
     balances = client.get_signed("/fapi/v3/balance", timeout=10)
     for item in balances:
@@ -377,6 +418,8 @@ def main() -> None:
         limit=required_bars,
     )
     latest = klines[-1]
+    recent_2h = _recent_market_move(klines=klines, bars=8)
+    recent_24h = _recent_market_move(klines=klines, bars=96)
     signal_result = _calculate_signal(
         klines=klines,
         lookback_bars=args.lookback_bars,
@@ -429,6 +472,12 @@ def main() -> None:
     print(f"interval={settings.primary_interval}")
     print(f"latest_close_time={latest['close_time']}")
     print(f"latest_close={latest['close']}")
+    print(f"recent_2h_return_pct={recent_2h['return_pct']:.6f}")
+    print(f"recent_2h_long_pnl_001btc={recent_2h['long_pnl']:.8f}")
+    print(f"recent_2h_short_pnl_001btc={recent_2h['short_pnl']:.8f}")
+    print(f"recent_24h_return_pct={recent_24h['return_pct']:.6f}")
+    print(f"recent_24h_long_pnl_001btc={recent_24h['long_pnl']:.8f}")
+    print(f"recent_24h_short_pnl_001btc={recent_24h['short_pnl']:.8f}")
     print(f"momentum_pct={float(signal_result['momentum_pct']):.6f}")
     print(f"signal={signal_result['signal']}")
     print(f"confirmed={signal_result['confirmed']}")

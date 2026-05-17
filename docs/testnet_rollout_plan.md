@@ -29,6 +29,7 @@ Expected behavior:
 - calculate planned quantity and risk
 - update local shadow paper-trading state
 - print shadow realized/unrealized/total PnL
+- print recent 2-hour and 24-hour market movement plus hypothetical 0.01 BTC long/short PnL
 - print `result=DRY_RUN_NO_ORDER`
 
 ## Continuous Dry-Run Monitor
