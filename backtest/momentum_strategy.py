@@ -220,7 +220,7 @@ def run_momentum_strategy_replay(
     signals: list[str] = []
     trades: list[dict[str, Any]] = []
     equity_curve: list[float] = []
-    equity = config.initial_equity if config.sizing_mode == "EQUITY_COMPOUND" else 0.0
+    equity = config.initial_equity if config.sizing_mode in {"EQUITY_COMPOUND", "MARGIN_COMPOUND"} else 0.0
     position: dict[str, Any] | None = None
 
     for idx in range(start_idx, len(klines)):
