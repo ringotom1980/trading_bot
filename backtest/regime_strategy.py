@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from statistics import mean
 from typing import Any
 
 from risk.risk_manager import RiskConfig, calculate_dynamic_position_size
@@ -32,37 +31,12 @@ class RegimeStrategyConfig:
     qty_step: float = 0.001
 
 
-def _sma(values: list[float], window: int) -> float:
-    return mean(values[-window:])
-
-
-def _atr_pct(klines: list[dict[str, Any]], window: int) -> float:
-    if len(klines) < window + 1:
-        return 0.0
-
-    true_ranges: list[float] = []
-    for idx in range(len(klines) - window, len(klines)):
-        high = float(klines[idx]["high"])
-        low = float(klines[idx]["low"])
-        prev_close = float(klines[idx - 1]["close"])
-        true_ranges.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
-
-    latest_close = float(klines[-1]["close"])
-    if latest_close == 0:
-        return 0.0
-    return mean(true_ranges) / latest_close
-
-
-def _regime_signal(
+def _regime_signal_from_values(
     *,
-    closes: list[float],
+    gap: float,
+    slope: float,
     config: RegimeStrategyConfig,
 ) -> str:
-    fast = _sma(closes, config.fast_window)
-    slow = _sma(closes, config.slow_window)
-    gap = 0.0 if slow == 0 else (fast - slow) / slow
-    slope = closes[-1] - closes[-config.slope_window]
-
     if gap >= config.entry_gap_pct and slope > 0:
         return "LONG"
     if gap <= -config.entry_gap_pct and slope < 0:
@@ -70,6 +44,30 @@ def _regime_signal(
     if abs(gap) <= config.exit_gap_pct:
         return "FLAT"
     return "NEUTRAL"
+
+
+def _prefix_sum(values: list[float]) -> list[float]:
+    prefix = [0.0]
+    total = 0.0
+    for value in values:
+        total += value
+        prefix.append(total)
+    return prefix
+
+
+def _window_average(prefix: list[float], *, end_idx: int, window: int) -> float:
+    start_idx = end_idx - window + 1
+    return (prefix[end_idx + 1] - prefix[start_idx]) / window
+
+
+def _true_ranges(klines: list[dict[str, Any]], closes: list[float]) -> list[float]:
+    values = [0.0]
+    for idx in range(1, len(klines)):
+        high = float(klines[idx]["high"])
+        low = float(klines[idx]["low"])
+        prev_close = closes[idx - 1]
+        values.append(max(high - low, abs(high - prev_close), abs(low - prev_close)))
+    return values
 
 
 def _confirmed_signal(signals: list[str], signal: str, bars: int) -> bool:
@@ -156,6 +154,8 @@ def run_regime_strategy_replay(
         raise ValueError("not enough klines for regime strategy")
 
     closes = [float(kline["close"]) for kline in klines]
+    close_prefix = _prefix_sum(closes)
+    tr_prefix = _prefix_sum(_true_ranges(klines, closes))
     start_idx = max(config.slow_window, config.atr_window + 1, config.slope_window)
     signals: list[str] = []
     trades: list[dict[str, Any]] = []
@@ -164,13 +164,17 @@ def run_regime_strategy_replay(
     position: dict[str, Any] | None = None
 
     for idx in range(start_idx, len(klines)):
-        window_closes = closes[: idx + 1]
         latest = klines[idx]
         close = float(latest["close"])
         high = float(latest["high"])
         low = float(latest["low"])
-        atr_pct = _atr_pct(klines[: idx + 1], config.atr_window)
-        signal = _regime_signal(closes=window_closes, config=config)
+        fast = _window_average(close_prefix, end_idx=idx, window=config.fast_window)
+        slow = _window_average(close_prefix, end_idx=idx, window=config.slow_window)
+        gap = 0.0 if slow == 0 else (fast - slow) / slow
+        slope = closes[idx] - closes[idx - config.slope_window]
+        atr = _window_average(tr_prefix, end_idx=idx, window=config.atr_window)
+        atr_pct = 0.0 if close == 0 else atr / close
+        signal = _regime_signal_from_values(gap=gap, slope=slope, config=config)
         signals.append(signal)
 
         if position is None:
@@ -302,4 +306,3 @@ def run_regime_strategy_replay(
         "trades": trades,
         "equity_curve": equity_curve,
     }
-
