@@ -40,6 +40,10 @@ def main() -> None:
     parser.add_argument("--exit-confirm-bars", type=int, default=8)
     parser.add_argument("--min-hold-bars", type=int, default=96)
     parser.add_argument("--max-hold-bars", type=int, default=2880)
+    parser.add_argument("--slope-window", type=int, default=240)
+    parser.add_argument("--atr-window", type=int, default=96)
+    parser.add_argument("--hard-stop-atr-multiplier", type=float, default=3.0)
+    parser.add_argument("--trailing-atr-multiplier", type=float, default=4.0)
     args = parser.parse_args()
 
     settings = load_settings()
@@ -66,6 +70,10 @@ def main() -> None:
         max_hold_bars=args.max_hold_bars,
         entry_gap_pct=args.entry_gap_pct,
         exit_gap_pct=args.exit_gap_pct,
+        slope_window=args.slope_window,
+        atr_window=args.atr_window,
+        hard_stop_atr_multiplier=args.hard_stop_atr_multiplier,
+        trailing_atr_multiplier=args.trailing_atr_multiplier,
         account_equity=args.account_equity or 3391.35,
         risk_per_trade_pct=args.risk_per_trade_pct or settings.risk_per_trade_pct,
         leverage=args.leverage or settings.default_leverage,
@@ -87,6 +95,10 @@ def main() -> None:
     print(f"slow_window={config.slow_window}")
     print(f"entry_gap_pct={config.entry_gap_pct}")
     print(f"confirm_bars={config.confirm_bars}")
+    print(f"slope_window={config.slope_window}")
+    print(f"atr_window={config.atr_window}")
+    print(f"hard_stop_atr_multiplier={config.hard_stop_atr_multiplier}")
+    print(f"trailing_atr_multiplier={config.trailing_atr_multiplier}")
     print(f"risk_per_trade_pct={config.risk_per_trade_pct}")
     print(f"leverage={config.leverage}")
     print(f"total_trades={metrics['total_trades']}")
@@ -107,4 +119,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
