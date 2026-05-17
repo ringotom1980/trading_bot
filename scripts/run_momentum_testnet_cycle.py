@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -18,6 +19,9 @@ from config.settings import Settings, load_settings  # noqa: E402
 from exchange.binance_client import BinanceClient  # noqa: E402
 from exchange.order_executor import close_position_reduce_only, place_market_order  # noqa: E402
 from risk.risk_manager import RiskConfig, calculate_dynamic_position_size  # noqa: E402
+
+
+SHADOW_STATE_PATH = ROOT_DIR / "logs" / "momentum_shadow_state.json"
 
 
 def _is_closed_kline(close_time_ms: int) -> bool:
@@ -192,6 +196,165 @@ def _format_qty(qty: float) -> float:
     return float(f"{qty:.3f}")
 
 
+def _empty_shadow_state() -> dict[str, Any]:
+    return {
+        "position": None,
+        "realized_pnl": 0.0,
+        "trade_count": 0,
+        "last_bar_close_time": None,
+        "last_action": None,
+        "last_updated_at": None,
+    }
+
+
+def _load_shadow_state(path: Path = SHADOW_STATE_PATH) -> dict[str, Any]:
+    if not path.exists():
+        return _empty_shadow_state()
+    with path.open("r", encoding="utf-8") as fh:
+        loaded = json.load(fh)
+    state = _empty_shadow_state()
+    state.update(loaded)
+    return state
+
+
+def _save_shadow_state(state: dict[str, Any], path: Path = SHADOW_STATE_PATH) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", encoding="utf-8") as fh:
+        json.dump(state, fh, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def _shadow_exit_price(*, side: str, price: float, slippage_rate: float) -> float:
+    if side == "LONG":
+        return price * (1 - slippage_rate)
+    if side == "SHORT":
+        return price * (1 + slippage_rate)
+    raise ValueError(f"unknown side: {side}")
+
+
+def _shadow_entry_price(*, side: str, price: float, slippage_rate: float) -> float:
+    if side == "LONG":
+        return price * (1 + slippage_rate)
+    if side == "SHORT":
+        return price * (1 - slippage_rate)
+    raise ValueError(f"unknown side: {side}")
+
+
+def _shadow_pnl(*, side: str, entry_price: float, exit_price: float, qty: float) -> float:
+    if side == "LONG":
+        return (exit_price - entry_price) * qty
+    if side == "SHORT":
+        return (entry_price - exit_price) * qty
+    raise ValueError(f"unknown side: {side}")
+
+
+def _update_shadow_state(
+    *,
+    state: dict[str, Any],
+    signal: str,
+    confirmed: bool,
+    latest: dict[str, Any],
+    qty: float,
+    fee_rate: float = 0.0004,
+    slippage_rate: float = 0.0005,
+) -> dict[str, Any]:
+    close_time = int(latest["close_time"])
+    close_price = float(latest["close"])
+    now = datetime.now(tz=timezone.utc).isoformat()
+    position = state.get("position")
+    action = "SHADOW_HOLD"
+
+    if state.get("last_bar_close_time") == close_time:
+        return state
+
+    if position is None:
+        if confirmed and signal in {"LONG", "SHORT"} and qty > 0:
+            entry_price = _shadow_entry_price(
+                side=signal,
+                price=close_price,
+                slippage_rate=slippage_rate,
+            )
+            fee = entry_price * qty * fee_rate
+            state["position"] = {
+                "side": signal,
+                "qty": qty,
+                "entry_price": entry_price,
+                "entry_fee": fee,
+                "entry_close_time": close_time,
+                "entry_time": now,
+            }
+            action = f"SHADOW_ENTER_{signal}"
+    else:
+        position_side = str(position["side"])
+        if confirmed and signal != position_side:
+            exit_price = _shadow_exit_price(
+                side=position_side,
+                price=close_price,
+                slippage_rate=slippage_rate,
+            )
+            position_qty = float(position["qty"])
+            gross = _shadow_pnl(
+                side=position_side,
+                entry_price=float(position["entry_price"]),
+                exit_price=exit_price,
+                qty=position_qty,
+            )
+            exit_fee = exit_price * position_qty * fee_rate
+            net = gross - float(position.get("entry_fee", 0.0)) - exit_fee
+            state["realized_pnl"] = float(state.get("realized_pnl", 0.0)) + net
+            state["trade_count"] = int(state.get("trade_count", 0)) + 1
+            state["position"] = None
+            action = f"SHADOW_EXIT_{position_side}"
+
+            if signal in {"LONG", "SHORT"} and qty > 0:
+                entry_price = _shadow_entry_price(
+                    side=signal,
+                    price=close_price,
+                    slippage_rate=slippage_rate,
+                )
+                fee = entry_price * qty * fee_rate
+                state["position"] = {
+                    "side": signal,
+                    "qty": qty,
+                    "entry_price": entry_price,
+                    "entry_fee": fee,
+                    "entry_close_time": close_time,
+                    "entry_time": now,
+                }
+                action = f"SHADOW_REVERSE_{position_side}_TO_{signal}"
+
+    state["last_bar_close_time"] = close_time
+    state["last_action"] = action
+    state["last_updated_at"] = now
+    return state
+
+
+def _shadow_unrealized_pnl(
+    *,
+    state: dict[str, Any],
+    latest_price: float,
+    fee_rate: float = 0.0004,
+    slippage_rate: float = 0.0005,
+) -> float:
+    position = state.get("position")
+    if not isinstance(position, dict):
+        return 0.0
+    side = str(position["side"])
+    qty = float(position["qty"])
+    exit_price = _shadow_exit_price(
+        side=side,
+        price=latest_price,
+        slippage_rate=slippage_rate,
+    )
+    gross = _shadow_pnl(
+        side=side,
+        entry_price=float(position["entry_price"]),
+        exit_price=exit_price,
+        qty=qty,
+    )
+    exit_fee = exit_price * qty * fee_rate
+    return gross - float(position.get("entry_fee", 0.0)) - exit_fee
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run one momentum Testnet cycle")
     parser.add_argument("--execute-testnet", action="store_true", help="Actually place Binance Testnet orders")
@@ -240,6 +403,22 @@ def main() -> None:
         confirmed=bool(signal_result["confirmed"]),
         position_side=position["side"],
     )
+    shadow_state = _load_shadow_state()
+    shadow_state = _update_shadow_state(
+        state=shadow_state,
+        signal=str(signal_result["signal"]),
+        confirmed=bool(signal_result["confirmed"]),
+        latest=latest,
+        qty=qty,
+    )
+    _save_shadow_state(shadow_state)
+    shadow_position = shadow_state.get("position") if isinstance(shadow_state.get("position"), dict) else None
+    shadow_unrealized_pnl = _shadow_unrealized_pnl(
+        state=shadow_state,
+        latest_price=float(latest["close"]),
+    )
+    shadow_realized_pnl = float(shadow_state.get("realized_pnl", 0.0))
+    shadow_total_pnl = shadow_realized_pnl + shadow_unrealized_pnl
 
     print("momentum testnet cycle")
     print(f"mode={'EXECUTE_TESTNET' if args.execute_testnet else 'DRY_RUN'}")
@@ -261,6 +440,13 @@ def main() -> None:
     print(f"planned_notional={sizing.notional:.4f}")
     print(f"planned_risk_usdt={sizing.risk_usdt:.4f}")
     print(f"action={action}")
+    print(f"shadow_position_side={None if shadow_position is None else shadow_position.get('side')}")
+    print(f"shadow_position_qty={0.0 if shadow_position is None else shadow_position.get('qty')}")
+    print(f"shadow_realized_pnl={shadow_realized_pnl:.8f}")
+    print(f"shadow_unrealized_pnl={shadow_unrealized_pnl:.8f}")
+    print(f"shadow_total_pnl={shadow_total_pnl:.8f}")
+    print(f"shadow_trade_count={int(shadow_state.get('trade_count', 0))}")
+    print(f"shadow_last_action={shadow_state.get('last_action')}")
 
     if not args.execute_testnet:
         print("result=DRY_RUN_NO_ORDER")
@@ -301,4 +487,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -9,6 +9,7 @@ This directory is kept intentionally small for the live research workflow.
 - `check_latest_events.py` - print recent system events for runtime diagnostics.
 - `check_momentum_signal.py` - read-only current signal check for the long-horizon momentum candidate.
 - `run_momentum_testnet_cycle.py` - dry-run/Testnet cycle for the momentum candidate; defaults to no order.
+  It also maintains shadow paper PnL in `logs/momentum_shadow_state.json`.
 - `init_db.py` - apply all SQL files in `storage/schema` in sorted order.
 - `seed_strategy.py` - create initial strategy/system state if missing.
 - `sync_historical_klines.py` - fetch and upsert historical Binance futures klines.

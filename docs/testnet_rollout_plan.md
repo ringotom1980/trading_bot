@@ -27,6 +27,8 @@ Expected behavior:
 - read Binance Futures Testnet USDT balance
 - read current Testnet BTCUSDT position
 - calculate planned quantity and risk
+- update local shadow paper-trading state
+- print shadow realized/unrealized/total PnL
 - print `result=DRY_RUN_NO_ORDER`
 
 ## Continuous Dry-Run Monitor
@@ -46,6 +48,14 @@ bash scripts/stop_momentum_dry_run.sh
 ```
 
 The loop runs every 15 minutes by default and only calls `run_momentum_testnet_cycle.py` without `--execute-testnet`, so it cannot place orders.
+
+Shadow paper state is stored at:
+
+```text
+logs/momentum_shadow_state.json
+```
+
+This file tracks hypothetical dry-run position, trade count, realized PnL, unrealized PnL, and total PnL. It is not exchange state and it does not place orders.
 
 ## Testnet Execution Gate
 
