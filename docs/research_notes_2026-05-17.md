@@ -53,3 +53,20 @@ The next strategy family should be low-frequency, regime-first, and volatility-s
 4. Validate on older, recent, and full ranges.
 5. Only then connect to Testnet execution.
 
+## First Valid Research Candidate
+
+The first simple candidate that stayed positive across older, recent, and full ranges was long-horizon momentum:
+
+- lookback: 1920 bars
+- threshold: 3%
+- confirmation: 96 bars
+- minimum hold: 384 bars
+- fixed research quantity: 0.01 BTC
+
+Validation snapshot:
+
+- Older range: 15 trades, net +98.08 USDT, PF 1.302
+- Recent range: 3 trades, net +30.17 USDT, PF 1.504
+- Full range: 18 trades, net +94.06 USDT, PF 1.237
+
+This is not ready for live trading. It is the first candidate worth turning into a controlled Testnet/paper strategy after adding runtime risk guards.

@@ -15,6 +15,7 @@ This directory is kept intentionally small for the live research workflow.
 
 - `run_market_diagnostics.py` - diagnose market range/regime and compare simple baselines.
 - `run_regime_strategy_backtest.py` - test the regime-first low-frequency swing strategy.
+- `run_momentum_strategy_backtest.py` - test the long-horizon momentum swing strategy.
 - `run_backtest.py` - backtest one strategy version over a date range.
 - `run_candidate_search.py` - generate and backtest candidates without saving them.
 - `run_candidate_search_and_save.py` - generate, backtest, and save candidates.
