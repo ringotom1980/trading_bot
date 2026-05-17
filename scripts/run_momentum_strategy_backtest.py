@@ -34,9 +34,10 @@ def main() -> None:
     parser.add_argument("--confirm-bars", type=int, default=96)
     parser.add_argument("--min-hold-bars", type=int, default=384)
     parser.add_argument("--qty", type=float, default=0.01)
-    parser.add_argument("--sizing-mode", type=str, choices=["FIXED_QTY", "EQUITY_COMPOUND"], default="FIXED_QTY")
+    parser.add_argument("--sizing-mode", type=str, choices=["FIXED_QTY", "EQUITY_COMPOUND", "MARGIN_COMPOUND"], default="FIXED_QTY")
     parser.add_argument("--initial-equity", type=float, default=100.0)
     parser.add_argument("--risk-per-trade-pct", type=float, default=0.005)
+    parser.add_argument("--margin-per-trade-pct", type=float, default=0.25)
     parser.add_argument("--leverage", type=float, default=20.0)
     parser.add_argument("--atr-window", type=int, default=96)
     args = parser.parse_args()
@@ -65,6 +66,7 @@ def main() -> None:
         sizing_mode=args.sizing_mode,
         initial_equity=args.initial_equity,
         risk_per_trade_pct=args.risk_per_trade_pct,
+        margin_per_trade_pct=args.margin_per_trade_pct,
         leverage=args.leverage,
         atr_window=args.atr_window,
     )
@@ -88,6 +90,7 @@ def main() -> None:
     print(f"sizing_mode={config.sizing_mode}")
     print(f"initial_equity={config.initial_equity}")
     print(f"risk_per_trade_pct={config.risk_per_trade_pct}")
+    print(f"margin_per_trade_pct={config.margin_per_trade_pct}")
     print(f"leverage={config.leverage}")
     print(f"atr_window={config.atr_window}")
     print(f"total_trades={metrics['total_trades']}")
@@ -99,7 +102,7 @@ def main() -> None:
     print(f"profit_factor={metrics['profit_factor']:.8f}")
     print(f"max_drawdown={metrics['max_drawdown']:.8f}")
     print(f"expectancy={metrics['expectancy']:.8f}")
-    if config.sizing_mode == "EQUITY_COMPOUND":
+    if config.sizing_mode in {"EQUITY_COMPOUND", "MARGIN_COMPOUND"}:
         final_equity = config.initial_equity + metrics["net_pnl"]
         return_pct = 0.0 if config.initial_equity == 0 else (final_equity / config.initial_equity - 1) * 100
         print(f"final_equity={final_equity:.8f}")

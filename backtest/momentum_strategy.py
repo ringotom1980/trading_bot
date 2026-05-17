@@ -20,6 +20,7 @@ class MomentumStrategyConfig:
     sizing_mode: str = "FIXED_QTY"
     initial_equity: float = 100.0
     risk_per_trade_pct: float = 0.005
+    margin_per_trade_pct: float = 0.25
     leverage: float = 20.0
     atr_window: int = 96
     hard_stop_atr_multiplier: float = 2.5
@@ -113,7 +114,23 @@ def _calculate_entry_qty(
         }
 
     if config.sizing_mode != "EQUITY_COMPOUND":
-        raise ValueError(f"unknown sizing_mode: {config.sizing_mode}")
+        if config.sizing_mode != "MARGIN_COMPOUND":
+            raise ValueError(f"unknown sizing_mode: {config.sizing_mode}")
+
+        notional = equity * config.margin_per_trade_pct * config.leverage
+        qty = int((notional / close) / config.qty_step) * config.qty_step
+        if qty < config.min_qty:
+            qty = 0.0
+        stop_pct = max(atr_pct * config.hard_stop_atr_multiplier, 0.003)
+        return qty, {
+            "sizing_mode": config.sizing_mode,
+            "equity_before": equity,
+            "margin_per_trade_pct": config.margin_per_trade_pct,
+            "risk_usdt": qty * close * stop_pct,
+            "stop_pct": stop_pct,
+            "notional": qty * close,
+            "margin_usdt": (qty * close) / config.leverage if config.leverage > 0 else 0.0,
+        }
 
     if equity <= 0:
         return 0.0, {
