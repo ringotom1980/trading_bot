@@ -7,6 +7,7 @@ This directory is kept intentionally small for the live research workflow.
 - `healthcheck_vps.sh` - compile, dependency, settings, DB, and Binance public-kline check. Does not trade.
 - `check_state.py` - print DB state, active strategy, latest decision/order/trade/event.
 - `check_latest_events.py` - print recent system events for runtime diagnostics.
+- `check_momentum_signal.py` - read-only current signal check for the long-horizon momentum candidate.
 - `init_db.py` - apply all SQL files in `storage/schema` in sorted order.
 - `seed_strategy.py` - create initial strategy/system state if missing.
 - `sync_historical_klines.py` - fetch and upsert historical Binance futures klines.
