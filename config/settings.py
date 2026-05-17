@@ -144,6 +144,13 @@ class Settings:
     trading_state: str
     live_armed: bool
 
+    default_leverage: int
+    risk_per_trade_pct: float
+    daily_loss_limit_pct: float
+    max_drawdown_limit_pct: float
+    max_consecutive_losses: int
+    cooldown_after_loss_minutes: int
+
     project_root: Path
     env_file: Path
 
@@ -193,6 +200,12 @@ def load_settings() -> Settings:
     )
 
     live_armed = _parse_bool(_get_env("LIVE_ARMED"), default=False)
+    default_leverage = _parse_int(_get_env("DEFAULT_LEVERAGE"), 20)
+    risk_per_trade_pct = float(_get_env("RISK_PER_TRADE_PCT", "0.005") or "0.005")
+    daily_loss_limit_pct = float(_get_env("DAILY_LOSS_LIMIT_PCT", "0.02") or "0.02")
+    max_drawdown_limit_pct = float(_get_env("MAX_DRAWDOWN_LIMIT_PCT", "0.10") or "0.10")
+    max_consecutive_losses = _parse_int(_get_env("MAX_CONSECUTIVE_LOSSES"), 3)
+    cooldown_after_loss_minutes = _parse_int(_get_env("COOLDOWN_AFTER_LOSS_MINUTES"), 60)
 
     # BACKTEST 模式下，不使用 trade_mode，並強制 live_armed 為 False
     if engine_mode == "BACKTEST":
@@ -217,6 +230,12 @@ def load_settings() -> Settings:
         trade_mode=trade_mode,
         trading_state=trading_state,
         live_armed=live_armed,
+        default_leverage=default_leverage,
+        risk_per_trade_pct=risk_per_trade_pct,
+        daily_loss_limit_pct=daily_loss_limit_pct,
+        max_drawdown_limit_pct=max_drawdown_limit_pct,
+        max_consecutive_losses=max_consecutive_losses,
+        cooldown_after_loss_minutes=cooldown_after_loss_minutes,
         project_root=project_root,
         env_file=env_file,
     )
