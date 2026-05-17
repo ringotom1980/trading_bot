@@ -38,12 +38,16 @@ def _parse_date_to_utc_start(date_text: str) -> datetime:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Sync historical klines")
+    parser.add_argument("--symbol", type=str, default=None, help="symbol, default from PRIMARY_SYMBOL")
+    parser.add_argument("--interval", type=str, default=None, help="interval, default from PRIMARY_INTERVAL")
     parser.add_argument("--start-date", type=str, default=None, help="UTC start date, format YYYY-MM-DD")
     parser.add_argument("--end-date", type=str, default=None, help="UTC end date, format YYYY-MM-DD")
     args = parser.parse_args()
 
     settings = load_settings()
     client = BinanceClient(settings)
+    symbol = args.symbol or settings.primary_symbol
+    interval = args.interval or settings.primary_interval
 
     if args.start_date and args.end_date:
         start_time = _parse_date_to_utc_start(args.start_date)
@@ -62,8 +66,8 @@ def main() -> None:
 
     rows = fetch_klines_range_all(
         client,
-        symbol=settings.primary_symbol,
-        interval=settings.primary_interval,
+        symbol=symbol,
+        interval=interval,
         start_time=start_time,
         end_time=end_time,
     )
@@ -72,13 +76,13 @@ def main() -> None:
         written_count = upsert_historical_klines(conn, rows=rows)
         latest_row = get_latest_historical_kline(
             conn,
-            symbol=settings.primary_symbol,
-            interval=settings.primary_interval,
+            symbol=symbol,
+            interval=interval,
         )
 
     print("historical klines sync 完成")
-    print(f"symbol={settings.primary_symbol}")
-    print(f"interval={settings.primary_interval}")
+    print(f"symbol={symbol}")
+    print(f"interval={interval}")
     print(f"range_start={start_time.isoformat()}")
     print(f"range_end={end_time.isoformat()}")
     print(f"fetched_rows={len(rows)}")
