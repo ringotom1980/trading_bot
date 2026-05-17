@@ -192,14 +192,14 @@ def _market_state(ind: dict[str, list[Any]], idx: int, config: RegimeStateConfig
         return "UNKNOWN"
     gap = (fast - slow) / slow if slow else 0.0
     regime_gap = (close - regime_ma) / regime_ma
-    if atr_pct >= config.high_vol_atr_pct:
-        return "HIGH_VOL"
     if abs(gap) < config.trend_gap_pct and atr_pct <= config.low_vol_atr_pct:
         return "LOW_VOL_RANGE"
     if gap >= config.trend_gap_pct and regime_gap > 0:
         return "TREND_UP"
     if gap <= -config.trend_gap_pct and regime_gap < 0:
         return "TREND_DOWN"
+    if atr_pct >= config.high_vol_atr_pct:
+        return "HIGH_VOL"
     return "RANGE"
 
 
@@ -413,9 +413,9 @@ def _metrics(klines: list[dict[str, Any]], config: RegimeStateConfig) -> dict[st
 
 def _configs(base: RegimeStateConfig) -> list[RegimeStateConfig]:
     configs: list[RegimeStateConfig] = []
-    for family in ["regime_breakout", "regime_pullback", "range_fade", "volatility_avoidance_trend"]:
+    for family in ["volatility_avoidance_trend", "range_fade", "regime_pullback", "regime_breakout"]:
         for margin in [0.03, 0.05, 0.08, 0.10]:
-            for trend_gap in [0.004, 0.006, 0.010]:
+            for trend_gap in [0.002, 0.004, 0.006, 0.010]:
                 for stop in [0.008, 0.012, 0.018]:
                     for take in [0.012, 0.02, 0.03, 0.045]:
                         configs.append(
