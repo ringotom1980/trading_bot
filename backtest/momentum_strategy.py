@@ -5,6 +5,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
+from risk.risk_manager import RiskConfig, calculate_dynamic_position_size
+
 
 @dataclass(frozen=True)
 class MomentumStrategyConfig:
@@ -15,6 +17,14 @@ class MomentumStrategyConfig:
     qty: float = 0.01
     fee_rate: float = 0.0004
     slippage_rate: float = 0.0005
+    sizing_mode: str = "FIXED_QTY"
+    initial_equity: float = 100.0
+    risk_per_trade_pct: float = 0.005
+    leverage: float = 20.0
+    atr_window: int = 96
+    hard_stop_atr_multiplier: float = 2.5
+    min_qty: float = 0.001
+    qty_step: float = 0.001
 
 
 def _entry_price(*, side: str, price: float, slippage_rate: float) -> float:
@@ -47,6 +57,94 @@ def _confirmed_signal(signals: list[str], signal: str, bars: int) -> bool:
     if len(signals) < bars:
         return False
     return all(item == signal for item in signals[-bars:])
+
+
+def _prefix_sum(values: list[float]) -> list[float]:
+    prefix = [0.0]
+    total = 0.0
+    for value in values:
+        total += value
+        prefix.append(total)
+    return prefix
+
+
+def _window_average(prefix: list[float], *, end_idx: int, window: int) -> float:
+    start_idx = end_idx - window + 1
+    return (prefix[end_idx + 1] - prefix[start_idx]) / window
+
+
+def _true_ranges(klines: list[dict[str, Any]], closes: list[float]) -> list[float]:
+    values = [0.0]
+    for idx in range(1, len(klines)):
+        high = float(klines[idx]["high"])
+        low = float(klines[idx]["low"])
+        previous_close = closes[idx - 1]
+        values.append(max(high - low, abs(high - previous_close), abs(low - previous_close)))
+    return values
+
+
+def _atr_pct(
+    *,
+    tr_prefix: list[float],
+    close: float,
+    idx: int,
+    window: int,
+) -> float:
+    if idx < window or close == 0:
+        return 0.0
+    atr = _window_average(tr_prefix, end_idx=idx, window=window)
+    return atr / close
+
+
+def _calculate_entry_qty(
+    *,
+    close: float,
+    atr_pct: float,
+    equity: float,
+    config: MomentumStrategyConfig,
+) -> tuple[float, dict[str, Any]]:
+    if config.sizing_mode == "FIXED_QTY":
+        return config.qty, {
+            "sizing_mode": config.sizing_mode,
+            "equity_before": equity,
+            "risk_usdt": 0.0,
+            "stop_pct": 0.0,
+            "notional": config.qty * close,
+        }
+
+    if config.sizing_mode != "EQUITY_COMPOUND":
+        raise ValueError(f"unknown sizing_mode: {config.sizing_mode}")
+
+    if equity <= 0:
+        return 0.0, {
+            "sizing_mode": config.sizing_mode,
+            "equity_before": equity,
+            "risk_usdt": 0.0,
+            "stop_pct": 0.0,
+            "notional": 0.0,
+        }
+
+    sizing = calculate_dynamic_position_size(
+        entry_price=close,
+        atr_pct=atr_pct,
+        config=RiskConfig(
+            account_equity=equity,
+            risk_per_trade_pct=config.risk_per_trade_pct,
+            leverage=config.leverage,
+            atr_stop_multiplier=config.hard_stop_atr_multiplier,
+            min_qty=config.min_qty,
+            qty_step=config.qty_step,
+        ),
+    )
+    return sizing.qty, {
+        "sizing_mode": config.sizing_mode,
+        "equity_before": equity,
+        "risk_usdt": sizing.risk_usdt,
+        "stop_pct": sizing.stop_pct,
+        "notional": sizing.notional,
+        "capped_by_notional": sizing.capped_by_notional,
+        "capped_by_hard_loss": sizing.capped_by_hard_loss,
+    }
 
 
 def _close_trade(
@@ -96,19 +194,27 @@ def run_momentum_strategy_replay(
     klines: list[dict[str, Any]],
     config: MomentumStrategyConfig,
 ) -> dict[str, Any]:
-    if len(klines) < config.lookback_bars + config.confirm_bars + 2:
+    start_idx = max(config.lookback_bars, config.atr_window)
+    if len(klines) < start_idx + config.confirm_bars + 2:
         raise ValueError("not enough klines for momentum strategy")
 
     closes = [float(kline["close"]) for kline in klines]
+    tr_prefix = _prefix_sum(_true_ranges(klines, closes))
     signals: list[str] = []
     trades: list[dict[str, Any]] = []
     equity_curve: list[float] = []
-    equity = 0.0
+    equity = config.initial_equity if config.sizing_mode == "EQUITY_COMPOUND" else 0.0
     position: dict[str, Any] | None = None
 
-    for idx in range(config.lookback_bars, len(klines)):
+    for idx in range(start_idx, len(klines)):
         base_close = closes[idx - config.lookback_bars]
         current_close = closes[idx]
+        current_atr_pct = _atr_pct(
+            tr_prefix=tr_prefix,
+            close=current_close,
+            idx=idx,
+            window=config.atr_window,
+        )
         momentum_pct = 0.0 if base_close == 0 else (current_close - base_close) / base_close
 
         if momentum_pct >= config.threshold_pct:
@@ -123,9 +229,17 @@ def run_momentum_strategy_replay(
 
         if position is None:
             if confirmed and signal in {"LONG", "SHORT"}:
+                qty, sizing_snapshot = _calculate_entry_qty(
+                    close=current_close,
+                    atr_pct=current_atr_pct,
+                    equity=equity,
+                    config=config,
+                )
+                if qty <= 0:
+                    continue
                 position = {
                     "side": signal,
-                    "qty": config.qty,
+                    "qty": qty,
                     "entry_idx": idx,
                     "entry_time": klines[idx]["close_time"],
                     "entry_price": _entry_price(
@@ -137,6 +251,8 @@ def run_momentum_strategy_replay(
                         "momentum_pct": momentum_pct,
                         "lookback_bars": config.lookback_bars,
                         "threshold_pct": config.threshold_pct,
+                        "atr_pct": current_atr_pct,
+                        **sizing_snapshot,
                     },
                 }
             continue
@@ -158,9 +274,17 @@ def run_momentum_strategy_replay(
         position = None
 
         if signal in {"LONG", "SHORT"}:
+            qty, sizing_snapshot = _calculate_entry_qty(
+                close=current_close,
+                atr_pct=current_atr_pct,
+                equity=equity,
+                config=config,
+            )
+            if qty <= 0:
+                continue
             position = {
                 "side": signal,
-                "qty": config.qty,
+                "qty": qty,
                 "entry_idx": idx,
                 "entry_time": klines[idx]["close_time"],
                 "entry_price": _entry_price(
@@ -172,6 +296,8 @@ def run_momentum_strategy_replay(
                     "momentum_pct": momentum_pct,
                     "lookback_bars": config.lookback_bars,
                     "threshold_pct": config.threshold_pct,
+                    "atr_pct": current_atr_pct,
+                    **sizing_snapshot,
                 },
             }
 
@@ -191,4 +317,3 @@ def run_momentum_strategy_replay(
         "trades": trades,
         "equity_curve": equity_curve,
     }
-
