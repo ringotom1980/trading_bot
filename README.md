@@ -42,19 +42,33 @@ See `docs/trading_system_requirements.md` for the current product and safety req
    python scripts/run_market_diagnostics.py --start-date 2025-05-01 --end-date 2026-05-15
    ```
 
-4. Backtest a known strategy:
+4. Backtest the current momentum candidate:
+
+   ```bash
+   python scripts/run_momentum_strategy_backtest.py --start-date 2025-05-01 --end-date 2026-05-15
+   ```
+
+5. Run a dry-run Testnet cycle:
+
+   ```bash
+   python scripts/run_momentum_testnet_cycle.py
+   ```
+
+   This reads Testnet balance/position and prints the planned action, but does not place orders.
+
+6. Backtest a known strategy:
 
    ```bash
    python scripts/run_backtest.py --version-code btc15m_v002 --start-date 2025-05-01 --end-date 2026-05-15
    ```
 
-5. Search candidates only after baselines and diagnostics justify the direction:
+7. Search candidates only after baselines and diagnostics justify the direction:
 
    ```bash
    python scripts/run_candidate_search.py --version-code btc15m_v002 --start-date 2025-05-01 --end-date 2026-03-01 --max-candidates 120 --top 10 --progress-step 20
    ```
 
-6. Save and validate only if candidates pass the gate.
+8. Save and validate only if candidates pass the gate.
 
 ## Promotion Rule of Thumb
 
