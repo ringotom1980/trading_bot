@@ -11,7 +11,63 @@ if str(ROOT_DIR) not in sys.path:
 
 from config.settings import load_settings  # noqa: E402
 from exchange.binance_client import BinanceClient  # noqa: E402
-from exchange.market_data import get_latest_klines  # noqa: E402
+
+
+def _is_closed_kline(close_time_ms: int) -> bool:
+    from datetime import datetime, timezone
+
+    now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
+    return close_time_ms <= now_ms
+
+
+def _normalize_kline(row: list) -> dict:
+    return {
+        "open_time": int(row[0]),
+        "open": float(row[1]),
+        "high": float(row[2]),
+        "low": float(row[3]),
+        "close": float(row[4]),
+        "volume": float(row[5]),
+        "close_time": int(row[6]),
+    }
+
+
+def _fetch_latest_closed_klines(
+    *,
+    client: BinanceClient,
+    symbol: str,
+    interval: str,
+    limit: int,
+) -> list[dict]:
+    rows: list[dict] = []
+    end_time: int | None = None
+
+    while len(rows) < limit:
+        params = {
+            "symbol": symbol,
+            "interval": interval,
+            "limit": min(1500, limit - len(rows) + 2),
+        }
+        if end_time is not None:
+            params["endTime"] = end_time
+
+        raw_rows = client.get_public(path="/fapi/v1/klines", params=params)
+        if not raw_rows:
+            break
+
+        batch = [_normalize_kline(row) for row in raw_rows]
+        batch = [row for row in batch if _is_closed_kline(int(row["close_time"]))]
+        rows = batch + rows
+        end_time = int(raw_rows[0][0]) - 1
+
+        if len(raw_rows) < int(params["limit"]):
+            break
+
+    deduped = {int(row["open_time"]): row for row in rows}
+    ordered = [deduped[key] for key in sorted(deduped)]
+    if len(ordered) < limit:
+        raise RuntimeError(f"not enough closed klines: need={limit}, got={len(ordered)}")
+    return ordered[-limit:]
 
 
 def _signal_from_momentum(momentum_pct: float, threshold_pct: float) -> str:
@@ -30,7 +86,7 @@ def main() -> None:
     required_bars = lookback_bars + confirm_bars
 
     client = BinanceClient(settings)
-    klines = get_latest_klines(
+    klines = _fetch_latest_closed_klines(
         client=client,
         symbol=settings.primary_symbol,
         interval=settings.primary_interval,
@@ -74,4 +130,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
