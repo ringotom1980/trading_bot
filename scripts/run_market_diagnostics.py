@@ -21,7 +21,6 @@ from backtest.metrics import calculate_backtest_metrics  # noqa: E402
 from config.settings import load_settings  # noqa: E402
 from storage.db import connection_scope  # noqa: E402
 from storage.repositories.historical_klines_repo import get_historical_klines_by_range  # noqa: E402
-from strategy.features import calculate_feature_pack  # noqa: E402
 
 
 def _parse_date_to_utc_start(date_text: str) -> datetime:
@@ -50,19 +49,34 @@ def _print_metrics(name: str, result: dict[str, Any]) -> None:
     print(f"  expectancy={metrics['expectancy']:.8f}")
 
 
-def _diagnose_regimes(klines: list[dict[str, Any]], lookback: int = 480) -> dict[str, Any]:
+def _mean(values: list[float]) -> float:
+    return sum(values) / len(values) if values else 0.0
+
+
+def _diagnose_regimes(klines: list[dict[str, Any]], lookback: int = 240) -> dict[str, Any]:
     counts: dict[str, int] = {}
     scores: list[float] = []
+    closes = [float(k["close"]) for k in klines]
 
     for idx in range(lookback - 1, len(klines)):
-        pack = calculate_feature_pack(
-            symbol=str(klines[idx]["symbol"]),
-            interval=str(klines[idx]["interval"]),
-            klines=klines[idx - lookback + 1: idx + 1],
-        )
-        regime = str(pack.get("regime", "UNKNOWN"))
+        window = closes[idx - lookback + 1: idx + 1]
+        sma60 = _mean(window[-60:])
+        sma240 = _mean(window[-240:])
+        slope60 = (window[-1] - window[-60]) / 60
+        sma_gap = 0.0 if sma240 == 0 else (sma60 - sma240) / sma240
+
+        if sma_gap >= 0.01 and slope60 > 0:
+            regime = "TREND_UP"
+            score = 1.0
+        elif sma_gap <= -0.01 and slope60 < 0:
+            regime = "TREND_DOWN"
+            score = -1.0
+        else:
+            regime = "RANGE"
+            score = 0.0
+
         counts[regime] = counts.get(regime, 0) + 1
-        scores.append(float(pack.get("regime_score", 0.0)))
+        scores.append(score)
 
     avg_score = sum(scores) / len(scores) if scores else 0.0
     return {
@@ -145,4 +159,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
