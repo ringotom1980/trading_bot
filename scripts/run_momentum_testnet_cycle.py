@@ -23,6 +23,24 @@ from risk.risk_manager import RiskConfig, calculate_dynamic_position_size  # noq
 
 SHADOW_STATE_PATH = ROOT_DIR / "logs" / "momentum_shadow_state.json"
 
+SHADOW_STRATEGY_CONFIGS = {
+    "long": {
+        "lookback_bars": 1920,
+        "threshold_pct": 0.03,
+        "confirm_bars": 96,
+    },
+    "mid": {
+        "lookback_bars": 96,
+        "threshold_pct": 0.008,
+        "confirm_bars": 8,
+    },
+    "short": {
+        "lookback_bars": 32,
+        "threshold_pct": 0.003,
+        "confirm_bars": 4,
+    },
+}
+
 
 def _is_closed_kline(close_time_ms: int) -> bool:
     now_ms = int(datetime.now(tz=timezone.utc).timestamp() * 1000)
@@ -245,6 +263,7 @@ def _empty_shadow_state() -> dict[str, Any]:
         "last_bar_close_time": None,
         "last_action": None,
         "last_updated_at": None,
+        "strategies": {},
     }
 
 
@@ -255,6 +274,8 @@ def _load_shadow_state(path: Path = SHADOW_STATE_PATH) -> dict[str, Any]:
         loaded = json.load(fh)
     state = _empty_shadow_state()
     state.update(loaded)
+    if not isinstance(state.get("strategies"), dict):
+        state["strategies"] = {}
     return state
 
 
@@ -396,6 +417,57 @@ def _shadow_unrealized_pnl(
     return gross - float(position.get("entry_fee", 0.0)) - exit_fee
 
 
+def _strategy_state_for(state: dict[str, Any], name: str) -> dict[str, Any]:
+    strategies = state.setdefault("strategies", {})
+    if not isinstance(strategies, dict):
+        strategies = {}
+        state["strategies"] = strategies
+
+    current = strategies.get(name)
+    if not isinstance(current, dict):
+        current = _empty_shadow_state()
+        current.pop("strategies", None)
+        strategies[name] = current
+    return current
+
+
+def _calculate_multi_timeframe_signals(
+    *,
+    klines: list[dict[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    result: dict[str, dict[str, Any]] = {}
+    for name, config in SHADOW_STRATEGY_CONFIGS.items():
+        result[name] = _calculate_signal(
+            klines=klines,
+            lookback_bars=int(config["lookback_bars"]),
+            threshold_pct=float(config["threshold_pct"]),
+            confirm_bars=int(config["confirm_bars"]),
+        )
+    return result
+
+
+def _combine_signals(signals: dict[str, dict[str, Any]]) -> str:
+    long_signal = signals["long"]
+    mid_signal = signals["mid"]
+    short_signal = signals["short"]
+
+    if not bool(mid_signal["confirmed"]) or not bool(short_signal["confirmed"]):
+        return "WAIT"
+
+    mid_side = str(mid_signal["signal"])
+    short_side = str(short_signal["signal"])
+    long_side = str(long_signal["signal"])
+
+    if mid_side == short_side and mid_side in {"LONG", "SHORT"}:
+        if bool(long_signal["confirmed"]) and long_side not in {mid_side, "FLAT"}:
+            return "CONFLICT_WAIT"
+        if bool(long_signal["confirmed"]) and long_side == mid_side:
+            return f"STRONG_{mid_side}"
+        return f"SMALL_{mid_side}"
+
+    return "WAIT"
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run one momentum Testnet cycle")
     parser.add_argument("--execute-testnet", action="store_true", help="Actually place Binance Testnet orders")
@@ -426,6 +498,8 @@ def main() -> None:
         threshold_pct=args.threshold_pct,
         confirm_bars=args.confirm_bars,
     )
+    mtf_signals = _calculate_multi_timeframe_signals(klines=klines)
+    combined_signal = _combine_signals(mtf_signals)
     balance = _get_testnet_usdt_balance(testnet_client)
     position = _get_testnet_position(testnet_client, settings.primary_symbol)
     atr_pct = _atr_pct(klines)
@@ -462,6 +536,32 @@ def main() -> None:
     )
     shadow_realized_pnl = float(shadow_state.get("realized_pnl", 0.0))
     shadow_total_pnl = shadow_realized_pnl + shadow_unrealized_pnl
+    strategy_shadow_summaries: dict[str, dict[str, Any]] = {}
+    for name, mtf_signal in mtf_signals.items():
+        sub_state = _strategy_state_for(shadow_state, name)
+        sub_state = _update_shadow_state(
+            state=sub_state,
+            signal=str(mtf_signal["signal"]),
+            confirmed=bool(mtf_signal["confirmed"]),
+            latest=latest,
+            qty=qty,
+        )
+        shadow_state["strategies"][name] = sub_state
+        sub_position = sub_state.get("position") if isinstance(sub_state.get("position"), dict) else None
+        sub_unrealized = _shadow_unrealized_pnl(
+            state=sub_state,
+            latest_price=float(latest["close"]),
+        )
+        sub_realized = float(sub_state.get("realized_pnl", 0.0))
+        strategy_shadow_summaries[name] = {
+            "position": sub_position,
+            "realized_pnl": sub_realized,
+            "unrealized_pnl": sub_unrealized,
+            "total_pnl": sub_realized + sub_unrealized,
+            "trade_count": int(sub_state.get("trade_count", 0)),
+            "last_action": sub_state.get("last_action"),
+        }
+    _save_shadow_state(shadow_state)
 
     print("momentum testnet cycle")
     print(f"mode={'EXECUTE_TESTNET' if args.execute_testnet else 'DRY_RUN'}")
@@ -481,6 +581,12 @@ def main() -> None:
     print(f"momentum_pct={float(signal_result['momentum_pct']):.6f}")
     print(f"signal={signal_result['signal']}")
     print(f"confirmed={signal_result['confirmed']}")
+    for name in ("long", "mid", "short"):
+        mtf_signal = mtf_signals[name]
+        print(f"{name}_signal={mtf_signal['signal']}")
+        print(f"{name}_confirmed={mtf_signal['confirmed']}")
+        print(f"{name}_momentum_pct={float(mtf_signal['momentum_pct']):.6f}")
+    print(f"combined_signal={combined_signal}")
     print(f"testnet_usdt_available={balance:.8f}")
     print(f"testnet_position_side={position['side']}")
     print(f"testnet_position_qty={position['qty']}")
@@ -496,6 +602,15 @@ def main() -> None:
     print(f"shadow_total_pnl={shadow_total_pnl:.8f}")
     print(f"shadow_trade_count={int(shadow_state.get('trade_count', 0))}")
     print(f"shadow_last_action={shadow_state.get('last_action')}")
+    for name in ("long", "mid", "short"):
+        summary = strategy_shadow_summaries[name]
+        sub_position = summary["position"]
+        print(f"{name}_shadow_position_side={None if sub_position is None else sub_position.get('side')}")
+        print(f"{name}_shadow_realized_pnl={float(summary['realized_pnl']):.8f}")
+        print(f"{name}_shadow_unrealized_pnl={float(summary['unrealized_pnl']):.8f}")
+        print(f"{name}_shadow_total_pnl={float(summary['total_pnl']):.8f}")
+        print(f"{name}_shadow_trade_count={int(summary['trade_count'])}")
+        print(f"{name}_shadow_last_action={summary['last_action']}")
 
     if not args.execute_testnet:
         print("result=DRY_RUN_NO_ORDER")

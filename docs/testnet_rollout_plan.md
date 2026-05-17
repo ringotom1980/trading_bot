@@ -30,6 +30,7 @@ Expected behavior:
 - update local shadow paper-trading state
 - print shadow realized/unrealized/total PnL
 - print recent 2-hour and 24-hour market movement plus hypothetical 0.01 BTC long/short PnL
+- print long/mid/short timeframe signals and each timeframe's shadow PnL
 - print `result=DRY_RUN_NO_ORDER`
 
 ## Continuous Dry-Run Monitor
@@ -57,6 +58,14 @@ logs/momentum_shadow_state.json
 ```
 
 This file tracks hypothetical dry-run position, trade count, realized PnL, unrealized PnL, and total PnL. It is not exchange state and it does not place orders.
+
+The file also tracks per-timeframe shadow strategies:
+
+- `long`: 1920-bar momentum, threshold 3%, confirmation 96 bars
+- `mid`: 96-bar momentum, threshold 0.8%, confirmation 8 bars
+- `short`: 32-bar momentum, threshold 0.3%, confirmation 4 bars
+
+The combined signal is informational during dry-run. Testnet execution still remains disabled unless the explicit Testnet gate is opened later.
 
 ## Testnet Execution Gate
 
