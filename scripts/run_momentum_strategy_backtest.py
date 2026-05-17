@@ -39,6 +39,9 @@ def main() -> None:
     parser.add_argument("--risk-per-trade-pct", type=float, default=0.005)
     parser.add_argument("--margin-per-trade-pct", type=float, default=0.25)
     parser.add_argument("--leverage", type=float, default=20.0)
+    parser.add_argument("--maintenance-margin-pct", type=float, default=0.004)
+    parser.add_argument("--liquidation-fee-pct", type=float, default=0.0015)
+    parser.add_argument("--funding-rate-per-8h", type=float, default=0.0)
     parser.add_argument("--atr-window", type=int, default=96)
     args = parser.parse_args()
 
@@ -68,6 +71,9 @@ def main() -> None:
         risk_per_trade_pct=args.risk_per_trade_pct,
         margin_per_trade_pct=args.margin_per_trade_pct,
         leverage=args.leverage,
+        maintenance_margin_pct=args.maintenance_margin_pct,
+        liquidation_fee_pct=args.liquidation_fee_pct,
+        funding_rate_per_8h=args.funding_rate_per_8h,
         atr_window=args.atr_window,
     )
     result = run_momentum_strategy_replay(klines=klines, config=config)
@@ -92,6 +98,9 @@ def main() -> None:
     print(f"risk_per_trade_pct={config.risk_per_trade_pct}")
     print(f"margin_per_trade_pct={config.margin_per_trade_pct}")
     print(f"leverage={config.leverage}")
+    print(f"maintenance_margin_pct={config.maintenance_margin_pct}")
+    print(f"liquidation_fee_pct={config.liquidation_fee_pct}")
+    print(f"funding_rate_per_8h={config.funding_rate_per_8h}")
     print(f"atr_window={config.atr_window}")
     print(f"total_trades={metrics['total_trades']}")
     print(f"win_rate={metrics['win_rate']:.4f}")

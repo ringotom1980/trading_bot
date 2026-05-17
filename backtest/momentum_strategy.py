@@ -22,6 +22,9 @@ class MomentumStrategyConfig:
     risk_per_trade_pct: float = 0.005
     margin_per_trade_pct: float = 0.25
     leverage: float = 20.0
+    maintenance_margin_pct: float = 0.004
+    liquidation_fee_pct: float = 0.0015
+    funding_rate_per_8h: float = 0.0
     atr_window: int = 96
     hard_stop_atr_multiplier: float = 2.5
     min_qty: float = 0.001
@@ -50,6 +53,36 @@ def _gross_pnl(*, side: str, entry_price: float, exit_price: float, qty: float) 
     if side == "SHORT":
         return (entry_price - exit_price) * qty
     raise ValueError(f"unknown side: {side}")
+
+
+def _liquidation_price(
+    *,
+    side: str,
+    entry_price: float,
+    margin_usdt: float,
+    qty: float,
+    maintenance_margin_pct: float,
+) -> float | None:
+    if qty <= 0:
+        return None
+    buffer_per_btc = margin_usdt / qty
+    if side == "LONG":
+        return entry_price + entry_price * maintenance_margin_pct - buffer_per_btc
+    if side == "SHORT":
+        return entry_price - entry_price * maintenance_margin_pct + buffer_per_btc
+    raise ValueError(f"unknown side: {side}")
+
+
+def _funding_cost(
+    *,
+    position: dict[str, Any],
+    bars_held: int,
+    config: MomentumStrategyConfig,
+) -> float:
+    if config.funding_rate_per_8h == 0:
+        return 0.0
+    notional = float(position.get("notional", 0.0))
+    return notional * config.funding_rate_per_8h * (bars_held / 32.0)
 
 
 def _confirmed_signal(signals: list[str], signal: str, bars: int) -> bool:
@@ -130,6 +163,7 @@ def _calculate_entry_qty(
             "stop_pct": stop_pct,
             "notional": qty * close,
             "margin_usdt": (qty * close) / config.leverage if config.leverage > 0 else 0.0,
+            "maintenance_margin_pct": config.maintenance_margin_pct,
         }
 
     if equity <= 0:
@@ -171,12 +205,14 @@ def _close_trade(
     exit_idx: int,
     config: MomentumStrategyConfig,
     close_reason: str,
+    raw_exit_price: float | None = None,
+    liquidation: bool = False,
 ) -> dict[str, Any]:
     side = str(position["side"])
     qty = float(position["qty"])
     exit_price = _exit_price(
         side=side,
-        price=float(exit_kline["close"]),
+        price=float(exit_kline["close"]) if raw_exit_price is None else raw_exit_price,
         slippage_rate=config.slippage_rate,
     )
     entry_price = float(position["entry_price"])
@@ -187,6 +223,9 @@ def _close_trade(
         qty=qty,
     )
     fees = (entry_price + exit_price) * qty * config.fee_rate
+    bars_held = exit_idx - int(position["entry_idx"])
+    funding_cost = _funding_cost(position=position, bars_held=bars_held, config=config)
+    liquidation_fee = float(position.get("notional", 0.0)) * config.liquidation_fee_pct if liquidation else 0.0
 
     return {
         "symbol": exit_kline["symbol"],
@@ -199,8 +238,10 @@ def _close_trade(
         "qty": qty,
         "gross_pnl": gross,
         "fees": fees,
-        "net_pnl": gross - fees,
-        "bars_held": exit_idx - int(position["entry_idx"]),
+        "funding_cost": funding_cost,
+        "liquidation_fee": liquidation_fee,
+        "net_pnl": gross - fees - funding_cost - liquidation_fee,
+        "bars_held": bars_held,
         "close_reason": close_reason,
         "entry_feature_snapshot": dict(position.get("entry_feature_snapshot") or {}),
     }
@@ -264,6 +305,8 @@ def run_momentum_strategy_replay(
                         price=current_close,
                         slippage_rate=config.slippage_rate,
                     ),
+                    "notional": sizing_snapshot.get("notional", qty * current_close),
+                    "margin_usdt": sizing_snapshot.get("margin_usdt", 0.0),
                     "entry_feature_snapshot": {
                         "momentum_pct": momentum_pct,
                         "lookback_bars": config.lookback_bars,
@@ -275,6 +318,50 @@ def run_momentum_strategy_replay(
             continue
 
         bars_held = idx - int(position["entry_idx"])
+        side = str(position["side"])
+        liquidation_price = _liquidation_price(
+            side=side,
+            entry_price=float(position["entry_price"]),
+            margin_usdt=float(position.get("margin_usdt", 0.0)),
+            qty=float(position["qty"]),
+            maintenance_margin_pct=config.maintenance_margin_pct,
+        )
+        if liquidation_price is not None:
+            if side == "LONG" and float(klines[idx]["low"]) <= liquidation_price:
+                trade = _close_trade(
+                    position=position,
+                    exit_kline=klines[idx],
+                    exit_idx=idx,
+                    config=config,
+                    close_reason="LIQUIDATION",
+                    raw_exit_price=liquidation_price,
+                    liquidation=True,
+                )
+                trades.append(trade)
+                equity = max(0.0, equity + float(trade["net_pnl"]))
+                equity_curve.append(equity)
+                position = None
+                if equity <= 0:
+                    break
+                continue
+            if side == "SHORT" and float(klines[idx]["high"]) >= liquidation_price:
+                trade = _close_trade(
+                    position=position,
+                    exit_kline=klines[idx],
+                    exit_idx=idx,
+                    config=config,
+                    close_reason="LIQUIDATION",
+                    raw_exit_price=liquidation_price,
+                    liquidation=True,
+                )
+                trades.append(trade)
+                equity = max(0.0, equity + float(trade["net_pnl"]))
+                equity_curve.append(equity)
+                position = None
+                if equity <= 0:
+                    break
+                continue
+
         if bars_held < config.min_hold_bars or not confirmed or signal == position["side"]:
             continue
 
@@ -287,8 +374,12 @@ def run_momentum_strategy_replay(
         )
         trades.append(trade)
         equity += float(trade["net_pnl"])
+        if config.sizing_mode in {"EQUITY_COMPOUND", "MARGIN_COMPOUND"}:
+            equity = max(0.0, equity)
         equity_curve.append(equity)
         position = None
+        if equity <= 0:
+            break
 
         if signal in {"LONG", "SHORT"}:
             qty, sizing_snapshot = _calculate_entry_qty(
@@ -309,6 +400,8 @@ def run_momentum_strategy_replay(
                     price=current_close,
                     slippage_rate=config.slippage_rate,
                 ),
+                "notional": sizing_snapshot.get("notional", qty * current_close),
+                "margin_usdt": sizing_snapshot.get("margin_usdt", 0.0),
                 "entry_feature_snapshot": {
                     "momentum_pct": momentum_pct,
                     "lookback_bars": config.lookback_bars,
@@ -328,6 +421,8 @@ def run_momentum_strategy_replay(
         )
         trades.append(trade)
         equity += float(trade["net_pnl"])
+        if config.sizing_mode in {"EQUITY_COMPOUND", "MARGIN_COMPOUND"}:
+            equity = max(0.0, equity)
         equity_curve.append(equity)
 
     return {
