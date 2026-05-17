@@ -37,6 +37,12 @@ def _simple_moving_average(values: list[float], window: int) -> float:
     return mean(values[-window:])
 
 
+def _safe_simple_moving_average(values: list[float], window: int) -> float | None:
+    if len(values) < window:
+        return None
+    return _simple_moving_average(values, window)
+
+
 def _ema(values: list[float], window: int) -> float:
     if len(values) < window:
         raise ValueError(f"資料不足，無法計算 EMA{window}")
@@ -67,6 +73,18 @@ def _linear_slope(values: list[float], window: int) -> float:
         return 0.0
 
     return numerator / denominator
+
+
+def _safe_linear_slope(values: list[float], window: int) -> float | None:
+    if len(values) < window:
+        return None
+    return _linear_slope(values, window)
+
+
+def _relative_to(value: float, baseline: float | None) -> float:
+    if baseline is None or baseline == 0:
+        return 0.0
+    return (value - baseline) / baseline
 
 
 def _returns(values: list[float]) -> list[float]:
@@ -288,6 +306,13 @@ def calculate_feature_pack(symbol: str, interval: str, klines: list[dict[str, An
 
     sma5_vs_sma20_pct = 0.0 if sma20 == 0 else (sma5 - sma20) / sma20
     sma20_vs_sma60_pct = 0.0 if sma60 == 0 else (sma20 - sma60) / sma60
+    sma240 = _safe_simple_moving_average(closes, 240)
+    sma480 = _safe_simple_moving_average(closes, 480)
+
+    close_vs_sma240_pct = _relative_to(latest_close, sma240)
+    close_vs_sma480_pct = _relative_to(latest_close, sma480)
+    sma60_vs_sma240_pct = _relative_to(sma60, sma240)
+    sma240_vs_sma480_pct = 0.0 if sma240 is None else _relative_to(sma240, sma480)
 
     return_1 = _pct_change(closes, 1)
     return_3 = _pct_change(closes, 3)
@@ -296,6 +321,9 @@ def calculate_feature_pack(symbol: str, interval: str, klines: list[dict[str, An
 
     slope_5 = _linear_slope(closes, 5)
     slope_10 = _linear_slope(closes, 10)
+    slope_60 = _safe_linear_slope(closes, 60) or 0.0
+    slope_120 = _safe_linear_slope(closes, 120) or 0.0
+    slope_240 = _safe_linear_slope(closes, 240) or 0.0
 
     range_pct = 0.0 if latest_close == 0 else (latest_high - latest_low) / latest_close
     range_pct_3_avg = _avg_range_pct(klines, 3)
@@ -353,8 +381,12 @@ def calculate_feature_pack(symbol: str, interval: str, klines: list[dict[str, An
         "close_vs_sma10_pct": close_vs_sma10_pct,
         "close_vs_sma20_pct": close_vs_sma20_pct,
         "close_vs_sma60_pct": close_vs_sma60_pct,
+        "close_vs_sma240_pct": close_vs_sma240_pct,
+        "close_vs_sma480_pct": close_vs_sma480_pct,
         "sma5_vs_sma20_pct": sma5_vs_sma20_pct,
         "sma20_vs_sma60_pct": sma20_vs_sma60_pct,
+        "sma60_vs_sma240_pct": sma60_vs_sma240_pct,
+        "sma240_vs_sma480_pct": sma240_vs_sma480_pct,
 
         "return_1": return_1,
         "return_3": return_3,
@@ -363,6 +395,9 @@ def calculate_feature_pack(symbol: str, interval: str, klines: list[dict[str, An
 
         "slope_5": slope_5,
         "slope_10": slope_10,
+        "slope_60": slope_60,
+        "slope_120": slope_120,
+        "slope_240": slope_240,
 
         "range_pct": range_pct,
         "range_pct_3_avg": range_pct_3_avg,

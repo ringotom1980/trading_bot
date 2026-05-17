@@ -238,11 +238,15 @@ def build_decision_context(
     """
     功能：抓取市場資料並計算 feature、signal 與 decision。
     """
+    feature_lookback_bars = int((strategy_params or {}).get("feature_lookback_bars", 60))
+    if feature_lookback_bars < 60:
+        feature_lookback_bars = 60
+
     klines = get_latest_klines(
         client=client,
         symbol=settings.primary_symbol,
         interval=settings.primary_interval,
-        limit=60,
+        limit=feature_lookback_bars,
     )
 
     feature_pack = calculate_feature_pack(

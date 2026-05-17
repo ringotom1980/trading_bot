@@ -20,8 +20,15 @@ DIAGNOSTIC_FEATURE_KEYS = [
     "kd_diff",
     "close_vs_sma20_pct",
     "close_vs_sma60_pct",
+    "close_vs_sma240_pct",
+    "close_vs_sma480_pct",
+    "sma60_vs_sma240_pct",
+    "sma240_vs_sma480_pct",
     "slope_5",
     "slope_10",
+    "slope_60",
+    "slope_120",
+    "slope_240",
     "atr_14_pct",
     "volatility_10",
     "volume_ratio_20",
@@ -246,6 +253,7 @@ def run_backtest_replay(
     fee_rate = float(params.get("fee_rate", 0.0004))
     slippage_rate = float(params.get("slippage_rate", 0.0005))
     warmup_bars = int(params.get("warmup_bars", 60))
+    feature_lookback_bars = int(params.get("feature_lookback_bars", 60))
     cooldown_bars = int(params.get("cooldown_bars", 0))
     min_hold_bars = int(params.get("min_hold_bars", 0))
     max_bars_hold = int(params.get("max_bars_hold", 0))
@@ -254,6 +262,10 @@ def run_backtest_replay(
 
     if warmup_bars < 60:
         warmup_bars = 60
+    if feature_lookback_bars < 60:
+        feature_lookback_bars = 60
+    if warmup_bars < feature_lookback_bars:
+        warmup_bars = feature_lookback_bars
 
     current_position: dict[str, Any] | None = None
     last_exit_bar_index: int | None = None
@@ -270,7 +282,7 @@ def run_backtest_replay(
         feature_pack = calculate_feature_pack(
             symbol=symbol,
             interval=interval,
-            klines=window[-60:],
+            klines=window[-feature_lookback_bars:],
         )
 
         signal_scores = calculate_signal_scores(feature_pack, params)
