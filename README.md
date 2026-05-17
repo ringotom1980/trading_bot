@@ -4,6 +4,16 @@ Self-learning trading bot research project for Binance Futures.
 
 Current goal: build a reliable simulation-first research workflow before any live trading.
 
+The project is now moving away from blind parameter search. The new workflow is:
+
+1. diagnose market regimes
+2. compare simple baselines
+3. build strategies only when they beat baselines after fees/slippage
+4. validate with walk-forward and Testnet
+5. switch to live only through explicit safety gates
+
+See `docs/trading_system_requirements.md` for the current product and safety requirements.
+
 ## Current Safety Policy
 
 - Keep VPS `.env` at `TRADE_MODE=SIMULATION`.
@@ -26,19 +36,25 @@ Current goal: build a reliable simulation-first research workflow before any liv
    python scripts/sync_historical_klines.py --start-date 2025-05-01 --end-date 2026-05-15
    ```
 
-3. Backtest a known strategy:
+3. Run market diagnostics and baselines:
+
+   ```bash
+   python scripts/run_market_diagnostics.py --start-date 2025-05-01 --end-date 2026-05-15
+   ```
+
+4. Backtest a known strategy:
 
    ```bash
    python scripts/run_backtest.py --version-code btc15m_v002 --start-date 2025-05-01 --end-date 2026-05-15
    ```
 
-4. Search candidates without saving:
+5. Search candidates only after baselines and diagnostics justify the direction:
 
    ```bash
    python scripts/run_candidate_search.py --version-code btc15m_v002 --start-date 2025-05-01 --end-date 2026-03-01 --max-candidates 120 --top 10 --progress-step 20
    ```
 
-5. Save and validate only if candidates pass the gate.
+6. Save and validate only if candidates pass the gate.
 
 ## Promotion Rule of Thumb
 
@@ -60,6 +76,7 @@ Minimum expectations before simulation trading:
 - `core/` - state machine, guards, heartbeat, runtime loop.
 - `strategy/` - features, signal scoring, decisions.
 - `backtest/` - replay engine and metrics.
+- `risk/` - dynamic risk sizing and guard helpers.
 - `evolver/` - candidate generation, scoring, walk-forward, promotion checks.
 - `governor/` - diagnostics-driven search space adjustment.
 - `exchange/` - Binance client and market/order APIs.

@@ -13,6 +13,7 @@ This directory is kept intentionally small for the live research workflow.
 
 ## Research workflow
 
+- `run_market_diagnostics.py` - diagnose market range/regime and compare simple baselines.
 - `run_backtest.py` - backtest one strategy version over a date range.
 - `run_candidate_search.py` - generate and backtest candidates without saving them.
 - `run_candidate_search_and_save.py` - generate, backtest, and save candidates.
