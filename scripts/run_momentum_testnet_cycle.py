@@ -22,20 +22,21 @@ from risk.risk_manager import RiskConfig, calculate_dynamic_position_size  # noq
 
 
 SHADOW_STATE_PATH = ROOT_DIR / "logs" / "momentum_shadow_state.json"
+SHADOW_STRATEGY_SET_VERSION = "mtf_wave_20260517_v2"
 
 SHADOW_STRATEGY_CONFIGS = {
     "long": {
-        "lookback_bars": 1920,
-        "threshold_pct": 0.03,
+        "lookback_bars": 3840,
+        "threshold_pct": 0.02,
         "confirm_bars": 96,
     },
     "mid": {
-        "lookback_bars": 96,
+        "lookback_bars": 384,
         "threshold_pct": 0.008,
-        "confirm_bars": 8,
+        "confirm_bars": 12,
     },
     "short": {
-        "lookback_bars": 32,
+        "lookback_bars": 96,
         "threshold_pct": 0.003,
         "confirm_bars": 4,
     },
@@ -257,6 +258,7 @@ def _format_qty(qty: float) -> float:
 
 def _empty_shadow_state() -> dict[str, Any]:
     return {
+        "strategy_key": None,
         "position": None,
         "realized_pnl": 0.0,
         "trade_count": 0,
@@ -417,18 +419,41 @@ def _shadow_unrealized_pnl(
     return gross - float(position.get("entry_fee", 0.0)) - exit_fee
 
 
-def _strategy_state_for(state: dict[str, Any], name: str) -> dict[str, Any]:
+def _strategy_config_key(name: str, config: dict[str, Any]) -> str:
+    return (
+        f"{SHADOW_STRATEGY_SET_VERSION}:{name}:"
+        f"lb={config['lookback_bars']}:th={config['threshold_pct']}:cb={config['confirm_bars']}"
+    )
+
+
+def _strategy_state_for(state: dict[str, Any], name: str, config: dict[str, Any]) -> dict[str, Any]:
     strategies = state.setdefault("strategies", {})
     if not isinstance(strategies, dict):
         strategies = {}
         state["strategies"] = strategies
 
+    expected_key = _strategy_config_key(name, config)
     current = strategies.get(name)
-    if not isinstance(current, dict):
+    if not isinstance(current, dict) or current.get("strategy_key") != expected_key:
         current = _empty_shadow_state()
         current.pop("strategies", None)
+        current["strategy_key"] = expected_key
         strategies[name] = current
     return current
+
+
+def _primary_strategy_key(*, lookback_bars: int, threshold_pct: float, confirm_bars: int) -> str:
+    return (
+        f"{SHADOW_STRATEGY_SET_VERSION}:primary:"
+        f"lb={lookback_bars}:th={threshold_pct}:cb={confirm_bars}"
+    )
+
+
+def _required_kline_count(*, lookback_bars: int, confirm_bars: int) -> int:
+    required = lookback_bars + confirm_bars
+    for config in SHADOW_STRATEGY_CONFIGS.values():
+        required = max(required, int(config["lookback_bars"]) + int(config["confirm_bars"]))
+    return required
 
 
 def _calculate_multi_timeframe_signals(
@@ -471,8 +496,8 @@ def _combine_signals(signals: dict[str, dict[str, Any]]) -> str:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run one momentum Testnet cycle")
     parser.add_argument("--execute-testnet", action="store_true", help="Actually place Binance Testnet orders")
-    parser.add_argument("--lookback-bars", type=int, default=1920)
-    parser.add_argument("--threshold-pct", type=float, default=0.03)
+    parser.add_argument("--lookback-bars", type=int, default=3840)
+    parser.add_argument("--threshold-pct", type=float, default=0.02)
     parser.add_argument("--confirm-bars", type=int, default=96)
     parser.add_argument("--risk-per-trade-pct", type=float, default=None)
     args = parser.parse_args()
@@ -482,7 +507,10 @@ def main() -> None:
     testnet_settings: Settings = replace(settings, trade_mode=TRADE_MODE_TESTNET)
     testnet_client = BinanceClient(testnet_settings)
 
-    required_bars = args.lookback_bars + args.confirm_bars
+    required_bars = _required_kline_count(
+        lookback_bars=args.lookback_bars,
+        confirm_bars=args.confirm_bars,
+    )
     klines = _fetch_latest_closed_klines(
         client=market_client,
         symbol=settings.primary_symbol,
@@ -520,7 +548,15 @@ def main() -> None:
         confirmed=bool(signal_result["confirmed"]),
         position_side=position["side"],
     )
+    primary_strategy_key = _primary_strategy_key(
+        lookback_bars=args.lookback_bars,
+        threshold_pct=args.threshold_pct,
+        confirm_bars=args.confirm_bars,
+    )
     shadow_state = _load_shadow_state()
+    if shadow_state.get("strategy_key") != primary_strategy_key:
+        shadow_state = _empty_shadow_state()
+        shadow_state["strategy_key"] = primary_strategy_key
     shadow_state = _update_shadow_state(
         state=shadow_state,
         signal=str(signal_result["signal"]),
@@ -538,7 +574,7 @@ def main() -> None:
     shadow_total_pnl = shadow_realized_pnl + shadow_unrealized_pnl
     strategy_shadow_summaries: dict[str, dict[str, Any]] = {}
     for name, mtf_signal in mtf_signals.items():
-        sub_state = _strategy_state_for(shadow_state, name)
+        sub_state = _strategy_state_for(shadow_state, name, SHADOW_STRATEGY_CONFIGS[name])
         sub_state = _update_shadow_state(
             state=sub_state,
             signal=str(mtf_signal["signal"]),
