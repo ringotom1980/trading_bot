@@ -29,6 +29,24 @@ Expected behavior:
 - calculate planned quantity and risk
 - print `result=DRY_RUN_NO_ORDER`
 
+## Continuous Dry-Run Monitor
+
+Run this before enabling Testnet execution:
+
+```bash
+bash scripts/start_momentum_dry_run.sh
+bash scripts/status_momentum_dry_run.sh
+bash scripts/logs_momentum_dry_run.sh
+```
+
+Stop it with:
+
+```bash
+bash scripts/stop_momentum_dry_run.sh
+```
+
+The loop runs every 15 minutes by default and only calls `run_momentum_testnet_cycle.py` without `--execute-testnet`, so it cannot place orders.
+
 ## Testnet Execution Gate
 
 Actual Testnet orders require all of the following:
@@ -55,4 +73,3 @@ The script will still do nothing if:
 ## Live Trading Gate
 
 This script does not support live execution. Live trading must be a separate reviewed rollout after Testnet performance is acceptable.
-

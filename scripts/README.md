@@ -41,6 +41,10 @@ This directory is kept intentionally small for the live research workflow.
 - `restart_bot.sh`
 - `status_bot.sh`
 - `logs_bot.sh`
+- `start_momentum_dry_run.sh`
+- `stop_momentum_dry_run.sh`
+- `status_momentum_dry_run.sh`
+- `logs_momentum_dry_run.sh`
 
 ## Manual or dangerous tools
 
