@@ -25,6 +25,9 @@ from storage.db import connection_scope  # noqa: E402
 from storage.repositories.historical_klines_repo import get_historical_klines_by_range  # noqa: E402
 
 
+_INDICATOR_CACHE: dict[tuple[int, int, int, int, int], dict[str, list[Any]]] = {}
+
+
 @dataclass(frozen=True)
 class LabConfig:
     family: str
@@ -98,6 +101,61 @@ def _rsi(closes: list[float], *, idx: int, window: int) -> float:
     return 100.0 - (100.0 / (1.0 + rs))
 
 
+def _rolling_max(values: list[float], window: int) -> list[float | None]:
+    result: list[float | None] = [None] * len(values)
+    for idx in range(window, len(values)):
+        result[idx] = max(values[idx - window : idx])
+    return result
+
+
+def _rolling_min(values: list[float], window: int) -> list[float | None]:
+    result: list[float | None] = [None] * len(values)
+    for idx in range(window, len(values)):
+        result[idx] = min(values[idx - window : idx])
+    return result
+
+
+def _prepare_indicators(klines: list[dict[str, Any]], config: LabConfig) -> dict[str, list[Any]]:
+    cache_key = (
+        id(klines),
+        config.fast_window,
+        config.slow_window,
+        config.channel_window,
+        config.rsi_window,
+    )
+    cached = _INDICATOR_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    closes = [float(kline["close"]) for kline in klines]
+    highs = [float(kline["high"]) for kline in klines]
+    lows = [float(kline["low"]) for kline in klines]
+    close_prefix = _prefix_sum(closes)
+    fast: list[float | None] = [None] * len(closes)
+    slow: list[float | None] = [None] * len(closes)
+    rsi_values: list[float | None] = [None] * len(closes)
+
+    for idx in range(config.fast_window, len(closes)):
+        fast[idx] = _window_avg(close_prefix, idx=idx, window=config.fast_window)
+    for idx in range(config.slow_window, len(closes)):
+        slow[idx] = _window_avg(close_prefix, idx=idx, window=config.slow_window)
+    for idx in range(config.rsi_window + 1, len(closes)):
+        rsi_values[idx] = _rsi(closes, idx=idx, window=config.rsi_window)
+
+    prepared = {
+        "closes": closes,
+        "highs": highs,
+        "lows": lows,
+        "fast": fast,
+        "slow": slow,
+        "rsi": rsi_values,
+        "channel_high": _rolling_max(highs, config.channel_window),
+        "channel_low": _rolling_min(lows, config.channel_window),
+    }
+    _INDICATOR_CACHE[cache_key] = prepared
+    return prepared
+
+
 def _entry_price(side: str, price: float, slippage_rate: float) -> float:
     return price * (1 + slippage_rate) if side == "LONG" else price * (1 - slippage_rate)
 
@@ -131,19 +189,19 @@ def _qty_from_margin(*, equity: float, price: float, config: LabConfig) -> tuple
 
 def _signal_for_idx(
     *,
-    klines: list[dict[str, Any]],
-    closes: list[float],
-    close_prefix: list[float],
+    indicators: dict[str, list[Any]],
     idx: int,
     config: LabConfig,
 ) -> str:
+    closes = indicators["closes"]
     close = closes[idx]
-    fast = _window_avg(close_prefix, idx=idx, window=config.fast_window)
-    slow = _window_avg(close_prefix, idx=idx, window=config.slow_window)
-    previous = klines[idx - config.channel_window : idx]
-    channel_high = max(float(kline["high"]) for kline in previous)
-    channel_low = min(float(kline["low"]) for kline in previous)
-    rsi = _rsi(closes, idx=idx, window=config.rsi_window)
+    fast = indicators["fast"][idx]
+    slow = indicators["slow"][idx]
+    channel_high = indicators["channel_high"][idx]
+    channel_low = indicators["channel_low"][idx]
+    rsi = indicators["rsi"][idx]
+    if fast is None or slow is None or channel_high is None or channel_low is None or rsi is None:
+        return "FLAT"
 
     if config.family == "trend_pullback":
         trend_up = fast > slow
@@ -218,8 +276,8 @@ def run_lab_strategy(klines: list[dict[str, Any]], config: LabConfig) -> dict[st
     if len(klines) < start_idx + 10:
         raise ValueError("not enough klines")
 
-    closes = [float(kline["close"]) for kline in klines]
-    close_prefix = _prefix_sum(closes)
+    indicators = _prepare_indicators(klines, config)
+    closes = indicators["closes"]
     equity = config.initial_equity
     equity_curve: list[float] = []
     trades: list[dict[str, Any]] = []
@@ -232,9 +290,7 @@ def run_lab_strategy(klines: list[dict[str, Any]], config: LabConfig) -> dict[st
         high = float(latest["high"])
         low = float(latest["low"])
         signal = _signal_for_idx(
-            klines=klines,
-            closes=closes,
-            close_prefix=close_prefix,
+            indicators=indicators,
             idx=idx,
             config=config,
         )
